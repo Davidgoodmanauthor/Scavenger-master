@@ -1,0 +1,22 @@
+# Static front + Neon locker. Do not run the full Vite app on Netlify.
+[build]
+  command = "npm install"
+  publish = "public"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "22"
+  SECRETS_SCAN_SMART_DETECTION_ENABLED = "false"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/still"
+  to = "/.netlify/functions/still"
+  status = 200
+
+[[redirects]]
+  from = "/play"
+  to = "/play.html"
+  status = 200

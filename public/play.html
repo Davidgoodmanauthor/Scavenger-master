@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#0c0b08"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-title" content="Scavenger Master"/>
+<title>Scavenger Master</title>
+<style>
+:root{--bg:#0c0b08;--fg:#f3ead4;--muted:#b7a88a;--gold:#c9a227;--goldfg:#1c160c;--card:#16130e;--line:#3a3326}
+html.day{--bg:#f6f0e4;--fg:#1c160c;--muted:#6b5c3e;--gold:#a07d12;--goldfg:#fff8e7;--card:#fffaf0;--line:#d9ccb0}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,sans-serif;min-height:100%}
+body{padding:20px 16px 48px;max-width:28rem;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.brand{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--gold);font-weight:600}
+.toggle{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:8px 12px;font-size:14px}
+h1{font-size:28px;margin:16px 0 6px;font-weight:700}
+.sub{color:var(--muted);font-size:14px;line-height:1.45}
+.code{font-family:ui-monospace,monospace;letter-spacing:.14em}
+label{display:block;margin:16px 0 6px;font-size:14px}
+input,button{font:inherit}
+input[type=text]{width:100%;height:48px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);padding:0 12px}
+.gold{width:100%;height:52px;margin-top:16px;border:0;border-radius:8px;background:var(--gold);color:var(--goldfg);font-weight:600;position:relative;z-index:6}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+.chip{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:999px;padding:8px 12px;font-size:14px}
+.chip.on{background:var(--gold);color:var(--goldfg);border-color:var(--gold)}
+.find{border:1px solid var(--line);background:var(--card);border-radius:12px;padding:12px;margin:12px 0}
+.find b{display:block;font-size:12px;color:var(--muted);letter-spacing:.14em;text-transform:uppercase}
+.find p{margin:6px 0 10px;font-size:16px}
+.find img{width:100%;border-radius:8px;display:block;margin:8px 0}
+.file{display:block;margin-top:10px;font-size:15px;color:var(--gold);position:relative;z-index:2;font-weight:600}
+.file.alt{font-size:13px;font-weight:400;color:var(--muted)}
+.file input{position:absolute;left:-9999px;width:1px;height:1px}
+.ok{color:var(--gold);font-size:13px;margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Scavenger Master<br/><span style="letter-spacing:.08em;font-size:10px;color:var(--muted)">Real World Scavenger Hunt</span></div>
+  <button class="toggle" id="mode" type="button">Day</button>
+</header>
+<div id="app"><p class="sub">Opening the hunt…</p></div>
+<script>
+try {
+const BAKED={"c":"PLAY","e":"police","i":["Find"],"p":10,"st":["Amazon","Target","Walmart","Visa","Starbucks","Bass Pro","Home Depot","Apple","Other"],"api":""};
+function huntFromLink(){
+  var h=BAKED;
+  try{
+    var raw=(location.hash||"").slice(1);
+    if(!raw && location.search) raw=location.search.slice(1);
+    var q=new URLSearchParams(raw);
+    var d=q.get("d")||"";
+    var code="", env="", amt="", itemsStr="";
+    if(d){
+      var parts=d.split("|");
+      code=String(parts[0]||"").toUpperCase();
+      env=parts[1]||"";
+      amt=parts[2]||"";
+      itemsStr=parts[3]||"";
+    } else {
+      code=String(q.get("c")||"").toUpperCase();
+      env=q.get("e")||"";
+      amt=q.get("a")||"";
+      itemsStr=q.get("i")||"";
+    }
+    if(code.length>=4){
+      var items=itemsStr.split("~").map(function(t){return t.trim()}).filter(function(t){return t.length>=2});
+      h={c:code,e:env||BAKED.e,i:items.length?items:BAKED.i,p:Number(amt||BAKED.p||0),st:BAKED.st,api:BAKED.api||""};
+    }
+  }catch(e){}
+  return h;
+}
+const H=huntFromLink();
+try{ document.title="Hunt "+H.c; }catch(e){}
+const K="sm.play."+H.c;
+const POLICE=H.e==="police";
+const POT=H.p>0;
+function load(){try{return JSON.parse(localStorage.getItem(K)||"{}")}catch(e){return {}}}
+function save(s){localStorage.setItem(K,JSON.stringify(s))}
+function $(id){return document.getElementById(id)}
+function apply(day){
+  document.documentElement.classList.toggle("day",day);
+  document.documentElement.style.background=day?"#f6f0e4":"#0c0b08";
+  $("mode").textContent=day?"Night":"Day";
+}
+$("mode").onclick=function(){apply(!document.documentElement.classList.contains("day"))};
+apply(false);
+function drawTo(img, max, q){
+  var w=img.width,h=img.height;
+  if(w>max||h>max){var s=max/Math.max(w,h);w=Math.round(w*s);h=Math.round(h*s)}
+  var c=document.createElement("canvas");
+  c.width=Math.max(64,w); c.height=Math.max(64,h);
+  var ctx=c.getContext("2d");
+  ctx.drawImage(img,0,0,c.width,c.height);
+  return c.toDataURL("image/jpeg",q);
+}
+function shrink(file, cb){
+  var done=false;
+  function out(show, send){ if(done) return; done=true; cb(show, send); }
+  setTimeout(function(){ out("",""); }, 6000);
+  var r=new FileReader();
+  r.onload=function(){
+    var img=new Image();
+    img.onload=function(){
+      try{
+        var show=drawTo(img, 960, 0.82);
+        out(show, show);
+      }catch(e){ out("",""); }
+    };
+    img.onerror=function(){ out("",""); };
+    img.src=r.result;
+  };
+  r.onerror=function(){ out("",""); };
+  r.readAsDataURL(file);
+}
+function pingRaw(raw){
+  try{ navigator.sendBeacon("https://ntfy.sh/smhunt"+H.c, new Blob([raw],{type:"text/plain"})); }catch(e){}
+  try{ fetch("https://ntfy.sh/smhunt"+H.c,{method:"POST",body:raw,keepalive:true}).catch(function(){}); }catch(e){}
+  try{ fetch("https://ntfy.sh/smstill"+H.c,{method:"POST",body:raw,keepalive:true}).catch(function(){}); }catch(e){}
+}
+function toB64url(dataUrl){
+  try{
+    var raw=String(dataUrl||"").split(",")[1]||"";
+    if(!raw || raw.length>24000) return "";
+    return raw.split("+").join("-").split("/").join("_").replace(/=+$/,"");
+  }catch(e){ return ""; }
+}
+function watchInbox(){
+  if(watchInbox.on) return;
+  watchInbox.on=true;
+  function tick(){
+    pingJoin();
+    fetch("https://ntfy.sh/smhunt"+H.c+"/json?poll=1&since=2h").then(function(r){ return r.text(); }).then(function(t){
+      var st=load();
+      var name=(st.name||"").trim().toLowerCase();
+      var grades=st.grades||{};
+      var list=st.list||[];
+      var changed=false;
+      var lines=t.split("\n");
+      for(var n=0;n<lines.length;n++){
+        try{
+          var row=JSON.parse(lines[n]);
+          var msg=typeof row.message==="string"?JSON.parse(row.message):null;
+          if(!msg) continue;
+          if(msg.k==="list"){
+            var next=(msg.i||"").split("~").map(function(x){return x.trim()}).filter(function(x){return x.length>=2});
+            if(next.length && JSON.stringify(next)!==JSON.stringify(list)){ list=next; changed=true; }
+          }
+          if(msg.k==="grade" && name && String(msg.n||"").toLowerCase()===name){
+            var g=msg.s==="ok"?"ok":"no";
+            if(grades[String(msg.i)]!==g){ grades[String(msg.i)]=g; changed=true; }
+          }
+        }catch(e){}
+      }
+      if(!changed) return;
+      st.grades=grades; st.list=list; save(st); render();
+    }).catch(function(){});
+  }
+  tick();
+  setInterval(tick, 4000);
+}
+function keepCopy(dataUrl, i){
+  try{
+    var a=document.createElement("a");
+    a.href=dataUrl;
+    a.download="Scavenger-"+H.c+"-Find-"+(Number(i)+1)+".jpg";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }catch(e){}
+}
+function stillName(st, i){
+  var slug=(st.name||"p").toLowerCase().replace(/[^a-z0-9]+/g,"").slice(0,18)||"p";
+  return "p-"+slug+"-"+Number(i)+".jpg";
+}
+function binUrl(st, i){
+  return "https://filebin.net/sm"+String(H.c).toLowerCase()+"/"+stillName(st,i);
+}
+function xhrPost(url, body, timeout, onOk){
+  try{
+    var x=new XMLHttpRequest();
+    x.open("POST", url);
+    x.timeout=timeout||7000;
+    x.onload=function(){ if(x.status>=200 && x.status<300) onOk(); };
+    x.ontimeout=function(){};
+    x.onerror=function(){};
+    x.send(body);
+  }catch(e){}
+}
+function sendStill(i, el){
+  var st=load();
+  st.photos=st.photos||{}; st.thumbs=st.thumbs||{}; st.inbeat=st.inbeat||{}; st.sent=st.sent||{};
+  if(POLICE && !st.inbeat[i]){ alert("Pick In beat or Not in beat first."); return; }
+  var pic=st.photos[i]||st.thumbs[i];
+  if(!pic){ el.textContent="Take a still first"; return; }
+  el.textContent="Sending…";
+  var title=(H.i&&H.i[i])||"";
+  var meta={k:"still",n:st.name,s:st.store||"",b:st.beat||"",ib:st.inbeat[i]||"",i:Number(i),t:title};
+  pingRaw(JSON.stringify(meta));
+  try{
+    var api=H.api||location.origin;
+    var photo=st.photos[i]||st.thumbs[i]||pic;
+    if(api && photo){
+      fetch(api+"/api/still",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({c:H.c,n:st.name,s:st.store||"",b:st.beat||"",ib:st.inbeat[i]||"",i:Number(i),t:title,p:photo}),
+        keepalive:true
+      }).catch(function(){});
+    }
+  }catch(e){}
+  try{ var next=load(); next.sent=next.sent||{}; next.sent[i]=true; save(next);}catch(e){}
+  el.disabled=false;
+  el.textContent="Sent — send again";
+  if(el.parentNode && !el.parentNode.querySelector(".ok")){
+    var note=document.createElement("div"); note.className="ok"; note.textContent="Sent to Admin. Waiting on a grade."; el.parentNode.appendChild(note);
+  }
+  function ship(blob){
+    if(!blob) return;
+    try{
+      fetch("https://ntfy.sh/smstill"+H.c,{
+        method:"POST",
+        headers:{"Filename":stillName(st,i),"Message":JSON.stringify(meta),"Content-Type":"image/jpeg"},
+        body:blob,
+        keepalive:true
+      }).catch(function(){});
+    }catch(e){}
+    try{
+      fetch(binUrl(st,i),{
+        method:"POST",
+        headers:{"Content-Type":"image/jpeg","accept":"application/json"},
+        body:blob,
+        keepalive:true
+      }).then(function(r){
+        if(!r || !r.ok) return;
+        meta.u=binUrl(st,i);
+        pingRaw(JSON.stringify(meta));
+      }).catch(function(){});
+    }catch(e){}
+    try{
+      var fd=new FormData();
+      fd.append("reqtype","fileupload");
+      fd.append("time","72h");
+      fd.append("fileToUpload", blob, stillName(st,i));
+      fetch("https://litterbox.catbox.moe/resources/internals/api.php",{method:"POST",body:fd})
+        .then(function(r){ return r.text(); })
+        .then(function(url){
+          url=String(url||"").trim();
+          if(url.indexOf("https://")!==0) return;
+          meta.u=url;
+          pingRaw(JSON.stringify(meta));
+        }).catch(function(){});
+    }catch(e){}
+  }
+  function dataUrlToBlob(dataUrl, cb){
+    try{
+      var b64=String(dataUrl||"").split(",")[1]||"";
+      if(!b64){ cb(null); return; }
+      var bin=atob(b64);
+      var arr=new Uint8Array(bin.length);
+      for(var n=0;n<bin.length;n++) arr[n]=bin.charCodeAt(n);
+      cb(new Blob([arr],{type:"image/jpeg"}));
+    }catch(e){ cb(null); }
+  }
+  dataUrlToBlob(pic, function(b){
+    if(b){ ship(b); return; }
+    var img=el.parentNode && el.parentNode.querySelector("img");
+    if(img && img.naturalWidth){
+      try{
+        var c=document.createElement("canvas");
+        c.width=img.naturalWidth; c.height=img.naturalHeight;
+        c.getContext("2d").drawImage(img,0,0);
+        c.toBlob(function(bb){ ship(bb); }, "image/jpeg", 0.85);
+        return;
+      }catch(e){}
+    }
+  });
+}
+function pingJoin(){
+  var st=load();
+  if(!st.name) return;
+  var now=Date.now();
+  if(st.joined && pingJoin.at && now-pingJoin.at<300000) return;
+  pingJoin.at=now;
+  pingRaw(JSON.stringify({k:"join",n:st.name,s:st.store||"",b:st.beat||""}));
+  st.joined=true; save(st);
+}
+function render(){
+  var s=load();
+  var app=$("app");
+  if(!s.name){
+    app.innerHTML='<p class="sub">You are a guest. Type your name. No account.</p>'
+      +'<h1>Join '+H.c+'</h1>'
+      +'<p class="sub">Real World Scavenger Hunt.</p>'
+      +(POT?'<p class="sub">$'+H.p+' each. Money stays among the group.</p>':'')
+      +'<label>Your name</label><input id="nm" type="text" maxlength="24" placeholder="Your name" value=""/>'
+      +'<button class="gold" id="go" type="button">Next</button>'
+      +'<p class="sub" style="margin-top:18px">Keep this hunt on your phone: browser menu → Add to Home Screen.</p>';
+    $("go").onclick=function(){
+      var n=($("nm").value||"").trim();
+      if(n.length<2) return;
+      s.name=n; save(s); render();
+    };
+    return;
+  }
+  if(POT && !s.store){
+    app.innerHTML='<p class="sub">'+s.name+' · <span class="code">'+H.c+'</span></p>'
+      +'<h1>If you win, which gift card?</h1>'
+      +'<p class="sub">Pick a store, or Other for a local shop. This is added to the admin wheel.</p>'
+      +'<div class="row" id="stores"></div>'
+      +'<input id="other" type="text" maxlength="40" placeholder="Local shop name" style="display:none;margin-top:8px"/>'
+      +'<button class="gold" id="go" type="button">Next</button>';
+    var box=$("stores");
+    var other=$("other");
+    H.st.forEach(function(name){
+      var b=document.createElement("button");
+      b.type="button"; b.className="chip"; b.textContent=name;
+      b.onclick=function(){
+        s.pick=name;
+        [].slice.call(box.children).forEach(function(el){el.className="chip"});
+        b.className="chip on";
+        other.style.display=name==="Other"?"block":"none";
+      };
+      box.appendChild(b);
+    });
+    $("go").onclick=function(){
+      var card=s.pick==="Other"?(other.value||"").trim():s.pick;
+      if(!card||card.length<2) return;
+      s.store=card; save(s); render();
+    };
+    return;
+  }
+  if(POLICE && !s.beat){
+    app.innerHTML='<p class="sub">'+s.name+' · <span class="code">'+H.c+'</span></p>'
+      +'<h1>Your beat.</h1>'
+      +'<p class="sub">Photos should be on your assigned beat. The 50/50 is In beat or Not in beat on each still.</p>'
+      +'<label>Beat</label><input id="bt" type="text" maxlength="24" placeholder="West 4"/>'
+      +'<button class="gold" id="go" type="button">Play</button>';
+    $("go").onclick=function(){
+      var b=($("bt").value||"").trim();
+      if(b.length<1) return;
+      s.beat=b; save(s); render();
+    };
+    return;
+  }
+  s.photos=s.photos||{}; s.inbeat=s.inbeat||{}; s.sent=s.sent||{};
+  pingJoin();
+  watchInbox();
+  var head='<p class="sub">'+s.name+(s.store?' · '+s.store:'')+(s.beat?' · Beat '+s.beat:'')+' · <span class="code">'+H.c+'</span></p>'
+    +'<h1>Find these.</h1>'
+    +'<p class="sub">Take a live photo on each find. It stays on this page. Send this still. If it did not go through, send again from the picture on this card. Do not pull old Camera-roll shots.</p>';
+  var finds=(s.list&&s.list.length)?s.list:H.i;
+  app.innerHTML=head+finds.map(function(t,i){
+    var pic=s.photos[i];
+    var ib=s.inbeat[i];
+    var sent=s.sent[i];
+    var beatBtns=POLICE
+      ? '<div class="row"><button type="button" class="chip'+(ib==="in"?" on":"")+'" data-beat="in" data-i="'+i+'">In beat</button>'
+        +'<button type="button" class="chip'+(ib==="out"?" on":"")+'" data-beat="out" data-i="'+i+'">Not in beat</button></div>'
+      : "";
+    return '<div class="find"><b>Find '+(i+1)+'</b><p>'+t+'</p>'+beatBtns
+      +(pic?'<img alt="" data-ph="'+i+'"/>':'')
+      +'<label class="file">Take a photo<input type="file" accept="image/*" capture="environment" data-i="'+i+'"></label>'
+      +'<label class="file alt">Use a hunt still already on this phone<input type="file" accept="image/jpeg" data-i="'+i+'"></label>'
+      +(pic?'<button type="button" class="gold" data-send="'+i+'" onclick="window.smSend(this);return false;">'+(sent?"Sent — send again":"Send this still")+'</button>':'')
+      +(sent?'<div class="ok">Sent. Admin grades at the end. Nothing comes back here. Send again only if this is the wrong still.</div>':'')
+      +'</div>';
+  }).join("");
+  app.querySelectorAll("img[data-ph]").forEach(function(im){
+    var i=im.getAttribute("data-ph");
+    if(s.photos[i]) im.src=s.photos[i];
+  });
+  app.querySelectorAll("input[type=file]").forEach(function(el){
+    el.addEventListener("change",function(){
+      var f=el.files&&el.files[0]; if(!f) return;
+      var i=el.getAttribute("data-i");
+      shrink(f,function(show, send){
+        if(!show) return;
+        var st=load(); st.photos=st.photos||{}; st.thumbs=st.thumbs||{};
+        st.photos[i]=show; st.thumbs[i]=send||show;
+        st.sent=st.sent||{}; st.sent[i]=false;
+        st.grades=st.grades||{}; st.grades[i]="";
+        try{ save(st); }catch(e){
+          st.photos[i]=send||show; try{ save(st); }catch(e2){}
+        }
+        if(el.getAttribute("capture")) keepCopy(show, i);
+        render();
+      });
+    });
+  });
+  app.querySelectorAll("[data-beat]").forEach(function(el){
+    el.addEventListener("click",function(){
+      var st=load(); st.inbeat=st.inbeat||{};
+      st.inbeat[el.getAttribute("data-i")]=el.getAttribute("data-beat");
+      save(st); render();
+    });
+  });
+}
+function smSend(btn){
+  try{ sendStill(btn.getAttribute("data-send"), btn); }catch(e){ btn.textContent="Send failed"; }
+}
+window.smSend=smSend;
+render();
+}catch(err){
+  var box=document.getElementById("app");
+  if(box) box.innerHTML='<p class="sub">This page hit a snag. Close it and open the newest invite.</p><p class="sub">'+(err&&err.message?err.message:"")+'</p>';
+}
+</script>
+</body>
+</html>
