@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#0c0b08"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-title" content="Scavenger Master"/>
+<title>Scavenger Master · Host billing</title>
+<style>
+:root{--bg:#0c0b08;--fg:#f3ead4;--muted:#b7a88a;--gold:#c9a227;--goldfg:#1c160c;--card:#16130e;--line:#3a3326}
+html.day{--bg:#f6f0e4;--fg:#1c160c;--muted:#6b5c3e;--gold:#a07d12;--goldfg:#fff8e7;--card:#fffaf0;--line:#d9ccb0}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,sans-serif}
+body{padding:16px 14px 72px;max-width:30rem;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.brand{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--gold);font-weight:700}
+.toggle{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:8px 12px}
+h1{font-size:26px;margin:12px 0 6px}
+.sub{color:var(--muted);font-size:14px;line-height:1.45}
+.card{border:1px solid var(--line);background:var(--card);border-radius:14px;padding:14px;margin:12px 0}
+label{display:block;margin:10px 0 6px;font-size:14px}
+input,button{font:inherit}
+input{width:100%;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:10px 12px}
+.gold,.ghost{width:100%;height:48px;margin-top:10px;border-radius:8px;font-weight:700}
+.gold{border:0;background:var(--gold);color:var(--goldfg)}
+.ghost{border:1px solid var(--line);background:transparent;color:var(--fg)}
+.banner{border:1px solid var(--gold);background:var(--card);color:var(--fg);border-radius:12px;padding:12px 14px;margin:12px 0;font-size:14px;line-height:1.45}
+.ok{color:#7dce8a}
+.bad{color:#d98b8b}
+#cardbox{display:none;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-top:8px}
+a{color:var(--gold)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Scavenger Master</div>
+  <button class="toggle" id="mode" type="button">Day</button>
+</header>
+<h1>Host billing</h1>
+<p class="sub">The game master pays. Players stay free. Test mode only until you say otherwise.</p>
+<div class="banner" id="banner">Checking billing…</div>
+<div class="card">
+  <label for="email">Host email</label>
+  <input id="email" type="email" autocomplete="email" placeholder="you@email.com"/>
+  <div id="cardwrap" style="display:none">
+    <label>Card</label>
+    <div id="cardbox"></div>
+  </div>
+  <button class="gold" id="go" type="button">Start 3-day trial</button>
+  <p class="sub" id="msg" style="margin-top:12px"></p>
+</div>
+<p class="sub"><a href="/host.html">Back to host</a></p>
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+(function(){
+  var mode=document.getElementById("mode");
+  function apply(day){document.documentElement.classList.toggle("day",day);mode.textContent=day?"Night":"Day";}
+  mode.onclick=function(){apply(!document.documentElement.classList.contains("day"));};
+  apply(false);
+  var banner=document.getElementById("banner");
+  var msg=document.getElementById("msg");
+  var go=document.getElementById("go");
+  var cardwrap=document.getElementById("cardwrap");
+  var cardbox=document.getElementById("cardbox");
+  var info=null;
+  var card=null;
+  var stripe=null;
+  function post(body){
+    return fetch("/api/still",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.text()}).then(function(t){try{return JSON.parse(t)}catch(e){throw new Error(t||"Bad reply")}});
+  }
+  fetch("/api/still").then(function(r){return r.json()}).then(function(d){
+    info=d||{};
+    if(info.enforcement){
+      banner.textContent="Billing can start a 3-day trial, then Squad at $6.99 a month for 10 players. You are not charged in this app for the prize pot.";
+      cardwrap.style.display="block";
+      cardbox.style.display="block";
+    }else{
+      banner.textContent="Billing is in test / not required yet — hunts are free.";
+    }
+  }).catch(function(){
+    banner.textContent="Billing is in test / not required yet — hunts are free.";
+  });
+  go.onclick=async function(){
+    msg.className="sub";
+    msg.textContent="Checking…";
+    go.disabled=true;
+    try{
+      var email=document.getElementById("email").value.trim();
+      if(!email||email.indexOf("@")<0) throw new Error("Enter the host email.");
+      var d=await post({a:"trial",email:email});
+      if(d.skipped||d.enforcement===false){
+        msg.className="sub ok";
+        msg.textContent="Not required yet. Hunts are free. No card was charged.";
+        return;
+      }
+      if(d.founder){
+        msg.className="sub ok";
+        msg.textContent="You're the owner. Free, no cap. No card needed.";
+        return;
+      }
+      if(!d.ok) throw new Error(d.error||"Could not start trial.");
+      if(!d.clientSecret||!d.publishableKey) throw new Error("Stripe did not return a setup key.");
+      if(!window.Stripe) throw new Error("Stripe.js did not load.");
+      if(!stripe) stripe=window.Stripe(d.publishableKey);
+      if(!card){
+        card=stripe.elements().create("card",{style:{base:{color:"#f3ead4",fontSize:"16px"}}});
+        cardwrap.style.display="block";
+        cardbox.style.display="block";
+        card.mount("#cardbox");
+        msg.textContent="Enter the card, then tap Start 3-day trial again.";
+        return;
+      }
+      var res=await stripe.confirmCardSetup(d.clientSecret,{payment_method:{card:card,billing_details:{email:email}}});
+      if(res.error) throw new Error(res.error.message||"Card setup failed.");
+      var pm=res.setupIntent&&res.setupIntent.payment_method;
+      var done=await post({a:"trial-confirm",email:email,payment_method:pm});
+      if(done.skipped){
+        msg.className="sub ok";
+        msg.textContent="Not required yet. Hunts are free. No card was charged.";
+        return;
+      }
+      if(!done.ok) throw new Error(done.error||"Trial did not save.");
+      msg.className="sub ok";
+      msg.textContent=done.founder?"You're the owner. Free, no cap.":"Trial is on. Squad bills after 3 days unless you cancel. Hunts stay on this site.";
+    }catch(err){
+      msg.className="sub bad";
+      msg.textContent=err.message||"Try again.";
+    }finally{
+      go.disabled=false;
+    }
+  };
+})();
+</script>
+</body>
+</html>

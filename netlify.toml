@@ -20,3 +20,13 @@
   from = "/play"
   to = "/play.html"
   status = 200
+
+[[redirects]]
+  from = "/host"
+  to = "/host.html"
+  status = 200
+
+[[redirects]]
+  from = "/billing"
+  to = "/billing.html"
+  status = 200
