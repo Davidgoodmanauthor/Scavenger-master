@@ -4,7 +4,7 @@ import { neon } from "@neondatabase/serverless";
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, Stripe-Signature",
 };
 
 const FAMILY = [
@@ -39,9 +39,252 @@ function isFounderEmail(email) {
   return BILLING.founderEmails.includes(String(email || "").trim().toLowerCase());
 }
 
-function assertHostAllowed() {
+function normEmail(v) {
+  return String(v || "").trim().toLowerCase();
+}
+
+function daysSince(d) {
+  if (!d) return 999;
+  return (Date.now() - new Date(d).getTime()) / 86400000;
+}
+
+async function stripeClient() {
+  const key = process.env.STRIPE_SECRET_KEY || "";
+  if (!key.startsWith("sk_")) return null;
+  const Stripe = (await import("stripe")).default;
+  return new Stripe(key);
+}
+
+async function squadPriceId(stripe, sql) {
+  const rows = await sql`select stripe_price_id from plans where id = ${"squad"} limit 1`;
+  if (rows[0]?.stripe_price_id) return rows[0].stripe_price_id;
+  const products = await stripe.products.list({ limit: 20 });
+  let product = products.data.find((p) => p.metadata?.sm_plan === "squad") || null;
+  if (!product) {
+    product = await stripe.products.create({
+      name: "Scavenger Master Squad",
+      metadata: { sm_plan: "squad" },
+    });
+  }
+  const prices = await stripe.prices.list({ product: product.id, active: true, limit: 10 });
+  let price = prices.data.find((p) => p.unit_amount === BILLING.squad.priceCents && p.recurring?.interval === "month");
+  if (!price) {
+    price = await stripe.prices.create({
+      product: product.id,
+      unit_amount: BILLING.squad.priceCents,
+      currency: "usd",
+      recurring: { interval: "month" },
+      metadata: { sm_plan: "squad" },
+    });
+  }
+  await sql`update plans set stripe_price_id = ${price.id} where id = ${"squad"}`;
+  return price.id;
+}
+
+async function upsertHost(sql, email, patch) {
+  const existing = await sql`select * from hosts where lower(email) = ${email} limit 1`;
+  if (!existing[0]) {
+    const id = nid("host_");
+    await sql`insert into hosts (id, email, plan_id, status)
+      values (${id}, ${email}, ${BILLING.squad.id}, ${patch.status || "founder"})`;
+    return { id, email, plan_id: BILLING.squad.id, status: patch.status || "founder", trial_hunts_used: 0 };
+  }
+  const h = existing[0];
+  if (patch.status) h.status = patch.status;
+  if (patch.stripe_customer_id != null) h.stripe_customer_id = patch.stripe_customer_id;
+  if (patch.card_fingerprint != null) h.card_fingerprint = patch.card_fingerprint;
+  if (patch.trial_started_at != null) h.trial_started_at = patch.trial_started_at;
+  if (patch.trial_ends_at != null) h.trial_ends_at = patch.trial_ends_at;
+  if (patch.trial_hunts_used != null) h.trial_hunts_used = patch.trial_hunts_used;
+  if (patch.past_due_at !== undefined) h.past_due_at = patch.past_due_at;
+  await sql`update hosts set
+    stripe_customer_id = ${h.stripe_customer_id || ""},
+    card_fingerprint = ${h.card_fingerprint || ""},
+    plan_id = ${h.plan_id || "squad"},
+    status = ${h.status},
+    trial_started_at = ${h.trial_started_at || null},
+    trial_ends_at = ${h.trial_ends_at || null},
+    trial_hunts_used = ${Number(h.trial_hunts_used) || 0},
+    past_due_at = ${h.past_due_at || null}
+    where id = ${h.id}`;
+  return h;
+}
+
+// Real gate. Never runs while ENFORCEMENT_ON is false.
+async function assertHostAllowed(sql, email, kind) {
+  if (!enforcementOn()) return null;
+  const e = normEmail(email);
+  if (isFounderEmail(e)) {
+    return upsertHost(sql, e, { status: "founder" });
+  }
+  if (!e) throw new Error("Host email required.");
+  const rows = await sql`select * from hosts where lower(email) = ${e} limit 1`;
+  const host = rows[0];
+  if (!host) throw new Error("Start a 3-day trial first.");
+  if (host.status === "founder" || host.status === "active") return host;
+  if (host.status === "trialing") {
+    if (host.trial_ends_at && new Date(host.trial_ends_at) < new Date()) {
+      throw new Error("Trial ended. Squad is $6.99 a month.");
+    }
+    if (kind === "create" && Number(host.trial_hunts_used || 0) >= BILLING.trial.hunts) {
+      throw new Error("Trial allows one hunt.");
+    }
+    return host;
+  }
+  if (host.status === "past_due") {
+    const grace = daysSince(host.past_due_at) <= BILLING.trial.days;
+    if (kind === "create") throw new Error("Card failed. You can finish the current hunt, not start a new one.");
+    if (grace) return host;
+    await sql`update hosts set status = ${"frozen"} where id = ${host.id}`;
+    throw new Error("This hunt is paused until the card is updated.");
+  }
+  if (host.status === "frozen" || host.status === "canceled") {
+    if (kind === "create") throw new Error("Start or renew Squad to host a hunt.");
+    throw new Error("This hunt is paused until the card is updated.");
+  }
+  throw new Error("Start a 3-day trial first.");
+}
+
+async function assertJoinCap(sql, hunt) {
   if (!enforcementOn()) return;
-  throw new Error("Billing enforcement is on but not wired yet.");
+  const hid = hunt.host_id || "";
+  if (!hid) return;
+  const hosts = await sql`select * from hosts where id = ${hid} limit 1`;
+  const host = hosts[0];
+  if (!host || host.status === "founder") return;
+  const cap = host.status === "trialing" ? BILLING.trial.players : BILLING.squad.includedPlayers;
+  const n = await sql`select count(*)::int as c from players where hunt_id = ${hunt.id}`;
+  if (Number(n[0]?.c || 0) >= cap) throw new Error("Player limit reached for this plan.");
+}
+
+async function handleStripeWebhook(event, sql) {
+  const sig = event.headers?.["stripe-signature"] || event.headers?.["Stripe-Signature"] || "";
+  const secret = process.env.STRIPE_WEBHOOK_SECRET || "";
+  if (!sig) return null;
+  if (!secret) return json({ ok: false, error: "Webhook secret is not set." }, 400);
+  const stripe = await stripeClient();
+  if (!stripe) return json({ ok: false, error: "Stripe is not configured." }, 400);
+  const raw = event.isBase64Encoded ? Buffer.from(event.body || "", "base64").toString("utf8") : String(event.body || "");
+  let stripeEvent;
+  try {
+    stripeEvent = stripe.webhooks.constructEvent(raw, sig, secret);
+  } catch {
+    return json({ ok: false, error: "Bad Stripe signature." }, 400);
+  }
+  const obj = stripeEvent.data?.object || {};
+  const customerId = obj.customer || obj.id || "";
+  const hosts = customerId
+    ? await sql`select * from hosts where stripe_customer_id = ${String(customerId)} limit 1`
+    : [];
+  const host = hosts[0];
+  if (host) {
+    if (stripeEvent.type === "invoice.payment_failed") {
+      await sql`update hosts set status = ${"past_due"}, past_due_at = coalesce(past_due_at, now()) where id = ${host.id}`;
+    } else if (stripeEvent.type === "invoice.paid") {
+      await sql`update hosts set status = ${"active"}, past_due_at = null where id = ${host.id}`;
+    } else if (stripeEvent.type === "customer.subscription.deleted") {
+      await sql`update hosts set status = ${"canceled"} where id = ${host.id}`;
+    } else if (stripeEvent.type === "customer.subscription.updated") {
+      const st = obj.status === "trialing" ? "trialing"
+        : obj.status === "active" ? "active"
+        : obj.status === "past_due" ? "past_due"
+        : obj.status === "canceled" || obj.status === "unpaid" ? "canceled"
+        : host.status;
+      await sql`update hosts set status = ${st} where id = ${host.id}`;
+      await sql`insert into subscriptions (id, host_id, stripe_subscription_id, plan_id, status)
+        values (${nid("sub_")}, ${host.id}, ${String(obj.id || "")}, ${"squad"}, ${st})`;
+    }
+  }
+  return json({ ok: true, received: stripeEvent.type });
+}
+
+async function startTrialSetup(sql, email) {
+  if (!enforcementOn()) return json({ ok: true, skipped: true, enforcement: false });
+  const e = normEmail(email);
+  if (!e || !e.includes("@")) return json({ ok: false, error: "Host email required." }, 400);
+  if (isFounderEmail(e)) {
+    await upsertHost(sql, e, { status: "founder" });
+    return json({ ok: true, founder: true, enforcement: true });
+  }
+  const stripe = await stripeClient();
+  if (!stripe) return json({ ok: false, error: "Stripe test keys are missing." }, 500);
+  await squadPriceId(stripe, sql);
+  let host = (await sql`select * from hosts where lower(email) = ${e} limit 1`)[0];
+  let customerId = host?.stripe_customer_id || "";
+  if (!customerId) {
+    const customer = await stripe.customers.create({ email: e, metadata: { sm: "host" } });
+    customerId = customer.id;
+  }
+  host = await upsertHost(sql, e, { stripe_customer_id: customerId, status: host?.status || "canceled" });
+  const si = await stripe.setupIntents.create({
+    customer: customerId,
+    payment_method_types: ["card"],
+    usage: "off_session",
+  });
+  return json({
+    ok: true,
+    clientSecret: si.client_secret,
+    publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || "",
+    trialDays: BILLING.trial.days,
+  });
+}
+
+async function confirmTrial(sql, email, paymentMethod) {
+  if (!enforcementOn()) return json({ ok: true, skipped: true, enforcement: false });
+  const e = normEmail(email);
+  const pmId = String(paymentMethod || "");
+  if (!e || !pmId) return json({ ok: false, error: "Email and card are required." }, 400);
+  if (isFounderEmail(e)) {
+    await upsertHost(sql, e, { status: "founder" });
+    return json({ ok: true, founder: true });
+  }
+  const stripe = await stripeClient();
+  if (!stripe) return json({ ok: false, error: "Stripe test keys are missing." }, 500);
+  const host = (await sql`select * from hosts where lower(email) = ${e} limit 1`)[0];
+  if (!host?.stripe_customer_id) return json({ ok: false, error: "Start the trial card step first." }, 400);
+  const pm = await stripe.paymentMethods.retrieve(pmId);
+  const fp = pm.card?.fingerprint || "";
+  if (fp) {
+    const used = await sql`select email from hosts where card_fingerprint = ${fp} and trial_started_at is not null limit 1`;
+    if (used[0]) return json({ ok: false, error: "That card already used a free trial." }, 400);
+  }
+  await stripe.paymentMethods.attach(pmId, { customer: host.stripe_customer_id });
+  await stripe.customers.update(host.stripe_customer_id, { invoice_settings: { default_payment_method: pmId } });
+  try {
+    const pi = await stripe.paymentIntents.create({
+      amount: 100,
+      currency: "usd",
+      customer: host.stripe_customer_id,
+      payment_method: pmId,
+      confirm: true,
+      off_session: true,
+      capture_method: "manual",
+      description: "Scavenger Master card check (released)",
+    });
+    await stripe.paymentIntents.cancel(pi.id);
+  } catch (err) {
+    return json({ ok: false, error: err instanceof Error ? err.message : "Card check failed." }, 400);
+  }
+  const priceId = await squadPriceId(stripe, sql);
+  const sub = await stripe.subscriptions.create({
+    customer: host.stripe_customer_id,
+    items: [{ price: priceId }],
+    trial_period_days: BILLING.trial.days,
+    default_payment_method: pmId,
+  });
+  const trialEnd = new Date(Date.now() + BILLING.trial.days * 86400000).toISOString();
+  await upsertHost(sql, e, {
+    stripe_customer_id: host.stripe_customer_id,
+    card_fingerprint: fp,
+    status: "trialing",
+    trial_started_at: new Date().toISOString(),
+    trial_ends_at: trialEnd,
+    trial_hunts_used: 0,
+    past_due_at: null,
+  });
+  await sql`insert into subscriptions (id, host_id, stripe_subscription_id, plan_id, status)
+    values (${nid("sub_")}, ${host.id}, ${sub.id}, ${"squad"}, ${"trialing"})`;
+  return json({ ok: true, status: "trialing", trialEndsAt: trialEnd, players: BILLING.trial.players });
 }
 
 const SCHEMA = [
@@ -114,6 +357,8 @@ const SCHEMA = [
     trial_ends_at timestamptz,
     trial_hunts_used integer not null default 0
   )`,
+  `alter table hosts add column if not exists past_due_at timestamptz`,
+  `alter table plans add column if not exists stripe_price_id text not null default ''`,
   `create table if not exists subscriptions (
     id text primary key,
     host_id text not null references hosts (id) on delete cascade,
@@ -273,16 +518,25 @@ export async function handler(event) {
         enforcement: enforcementOn(),
         whoPays: BILLING.whoPays,
         plan: BILLING.squad,
+        trial: BILLING.trial,
+        stripe: String(process.env.STRIPE_SECRET_KEY || "").startsWith("sk_test") ? "test" : (String(process.env.STRIPE_SECRET_KEY || "").startsWith("sk_live") ? "live" : "missing"),
       });
     }
 
     if (event.httpMethod !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
 
+    const hooked = await handleStripeWebhook(event, sql);
+    if (hooked) return hooked;
+
     const body = JSON.parse(event.body || "{}");
     const action = String(body.a || body.action || "").toLowerCase();
 
+    if (action === "trial") return startTrialSetup(sql, body.email || body.n || "");
+    if (action === "trial-confirm") return confirmTrial(sql, body.email || body.n || "", body.payment_method || body.pm || "");
+
     if (action === "create") {
-      assertHostAllowed();
+      const hostEmail = normEmail(body.email || body.hostEmail || "");
+      const hostRow = await assertHostAllowed(sql, hostEmail, "create");
       const name = String(body.n || body.name || "Host").trim().slice(0, 24) || "Host";
       const env = ["family", "police", "fire", "office", "warehouse", "school", "other"].includes(body.e)
         ? body.e
@@ -302,11 +556,15 @@ export async function handler(event) {
         if (!exists[0]) break;
         join = makeCode();
       }
-      await sql`insert into hunts (id, join_code, host_token_hash, spectator_token_hash, title, admin_name, environment, pot_enabled, pot_per_player, pot_remaining, status)
-        values (${huntId}, ${join}, ${hash(hostToken)}, ${hash(watchToken)}, ${"Scavenger Master"}, ${name}, ${env}, ${pot > 0}, ${pot}, ${0}, ${"open"})`;
+      const hostId = hostRow?.id || "";
+      await sql`insert into hunts (id, join_code, host_token_hash, spectator_token_hash, title, admin_name, environment, pot_enabled, pot_per_player, pot_remaining, status, host_id)
+        values (${huntId}, ${join}, ${hash(hostToken)}, ${hash(watchToken)}, ${"Scavenger Master"}, ${name}, ${env}, ${pot > 0}, ${pot}, ${0}, ${"open"}, ${hostId})`;
       for (let n = 0; n < titles.length; n++) {
         await sql`insert into hunt_items (id, hunt_id, sort_order, title, hint, points, list_no)
           values (${nid("i_")}, ${huntId}, ${n}, ${titles[n]}, ${""}, ${1}, ${Math.floor(n / 5) + 1})`;
+      }
+      if (enforcementOn() && hostRow?.status === "trialing") {
+        await sql`update hosts set trial_hunts_used = coalesce(trial_hunts_used, 0) + 1 where id = ${hostRow.id}`;
       }
       return json({ ok: true, code: join, hostToken, watchToken, items: titles, environment: env, pot });
     }
@@ -411,12 +669,13 @@ export async function handler(event) {
       const giftCard = String(body.s || "").trim().slice(0, 40);
       const beat = String(body.b || "").trim().slice(0, 24);
       if (!code || callsign.length < 2) return json({ ok: false, error: "Name and code required." }, 400);
-      const hunts = await sql`select id, status from hunts where join_code = ${code} limit 1`;
+      const hunts = await sql`select id, status, host_id from hunts where join_code = ${code} limit 1`;
       if (!hunts[0]) return json({ ok: false, error: "No hunt with that code." }, 404);
       if (hunts[0].status === "closed") return json({ ok: false, error: "This hunt is closed." }, 400);
       const gift = giftCard === "-" ? "" : giftCard;
       let players = await sql`select id from players where hunt_id = ${hunts[0].id} and lower(callsign) = ${callsign.toLowerCase()} limit 1`;
       if (!players[0]) {
+        await assertJoinCap(sql, hunts[0]);
         const pid = nid("p_");
         await sql`insert into players (id, hunt_id, token_hash, callsign, gift_card_pick, beat)
           values (${pid}, ${hunts[0].id}, ${nid("t_")}, ${callsign}, ${gift}, ${beat})`;
@@ -437,9 +696,12 @@ export async function handler(event) {
     if (!photo.startsWith("data:image/") || photo.length < 64) return json({ ok: false, error: "Missing still." }, 400);
     if (photo.length > 900000) return json({ ok: false, error: "Photo is too large." }, 400);
 
-    const hunts = await sql`select id, status from hunts where join_code = ${code} limit 1`;
+    const hunts = await sql`select id, status, host_id from hunts where join_code = ${code} limit 1`;
     if (!hunts[0]) return json({ ok: false, error: "No hunt with that code." }, 404);
     if (hunts[0].status === "closed") return json({ ok: false, error: "This hunt is closed." }, 400);
+    if (enforcementOn() && hunts[0].host_id) {
+      await assertHostAllowed(sql, (await sql`select email from hosts where id = ${hunts[0].host_id} limit 1`)[0]?.email || "", "play");
+    }
 
     const items = await sql`select id from hunt_items where hunt_id = ${hunts[0].id} order by list_no, sort_order`;
     const item = items[itemIndex] || items[Math.max(0, itemIndex - 1)] || items[0];
