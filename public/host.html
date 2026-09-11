@@ -39,8 +39,8 @@ textarea{min-height:88px}
 .item{display:grid;grid-template-columns:1fr 64px;gap:8px;margin:8px 0;align-items:center}
 .item b{grid-column:1/-1;font-size:12px;color:var(--muted)}
 .wheelwrap{position:relative;width:280px;height:280px;margin:18px auto}
-.wheel{width:280px;height:280px;border-radius:50%;transition:transform 3.2s cubic-bezier(.12,.7,.1,1)}
-.peg{position:absolute;left:50%;top:-6px;width:0;height:0;border-left:12px solid transparent;border-right:12px solid transparent;border-top:22px solid var(--gold);transform:translateX(-50%);z-index:3;filter:drop-shadow(0 1px 2px #000)}
+.wheel{width:280px;height:280px;border-radius:50%;overflow:hidden;transition:transform 4.8s cubic-bezier(.12,.78,.08,1)}
+.peg{position:absolute;left:50%;top:-8px;width:0;height:0;border-left:14px solid transparent;border-right:14px solid transparent;border-top:26px solid var(--gold);transform:translateX(-50%);z-index:3;filter:drop-shadow(0 1px 2px #000);pointer-events:none}
 .player{margin:12px 0}
 .player .who{font-size:15px;margin-bottom:8px}
 .film{display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 0 10px}
@@ -91,6 +91,8 @@ try {
   var LIST="sm.host.fyi.list";
   var boardCache=null;
   var spinR=0;
+  var lastLand="";
+  var spinning=false;
   var viewOnly=false;
   var watchCode="";
   var watchKey="";
@@ -481,7 +483,7 @@ try {
     html+='<p class="sub">Pot display $'+pot+'. Cash stays in the real pot. Nothing is charged here.</p></div>';
     if(cards.length){
       html+='<div class="wheelwrap"><div class="peg"></div><div class="wheel" id="wheel">'+wheelSvg(cards)+'</div></div>';
-      html+='<p class="sub" id="land" style="text-align:center">The gold pointer is the marker.</p>';
+      html+='<p class="sub" id="land" style="text-align:center">'+(lastLand?("Pointer is on "+lastLand):"The gold pointer is the marker.")+'</p>';
     }
     if(!viewOnly){
       if(shown && cards.length){
@@ -502,22 +504,52 @@ try {
         admin(out);
       }catch(e){ $("reveal").textContent=e.message||"Reveal failed"; }
     };
-    var last="";
-    if($("spin")) $("spin").onclick=function(){
-      spinR += 1080 + Math.floor(Math.random()*360);
-      $("wheel").style.transform="rotate("+spinR+"deg)";
-      var slice=360/cards.length;
+    var last=lastLand;
+    function setWheel(animated){
+      var w=$("wheel");
+      if(!w) return;
+      if(!animated){
+        w.style.transition="none";
+        w.style.transform="rotate("+spinR+"deg)";
+        w.getBoundingClientRect();
+        w.style.transition="";
+      }else{
+        w.style.transition="transform 4.8s cubic-bezier(.12,.78,.08,1)";
+        w.style.transform="rotate("+spinR+"deg)";
+      }
+    }
+    if(cards.length){
+      if(spinR===0){
+        var rest=360/cards.length/2;
+        spinR=(360-rest)%360;
+      }
+      setWheel(false);
+    }
+    function doSpin(){
+      if(!cards.length || spinning) return;
+      spinning=true;
+      var n=cards.length;
+      var slice=360/n;
+      var idx=Math.floor(Math.random()*n);
+      var center=idx*slice+slice/2;
+      var target=(360-center)%360;
+      var cur=((spinR%360)+360)%360;
+      var delta=(target-cur+360)%360;
+      if(delta<20) delta+=360;
+      spinR+=1440+delta;
+      setWheel(true);
       setTimeout(function(){
-        var deg=((360-(spinR%360))%360);
-        var idx=Math.floor(deg/slice)%cards.length;
+        spinning=false;
         last=cards[idx];
-        $("land").textContent="Pointer is on "+last;
-      }, 3300);
-    };
-    if($("accept")) $("accept").onclick=function(){ $("land").textContent=last?("Winner takes "+last):"Spin first."; };
+        lastLand=last;
+        if($("land")) $("land").textContent="Pointer is on "+last;
+      }, 4900);
+    }
+    if($("spin")) $("spin").onclick=doSpin;
+    if($("accept")) $("accept").onclick=function(){ $("land").textContent=lastLand?("Winner takes "+lastLand):"Spin first."; };
     if($("deduct")) $("deduct").onclick=async function(){
       try{ await post({a:"deduct",c:s.code,t:s.hostToken,remain:Math.max(0,pot-10)}); }catch(e){}
-      if($("spin")) $("spin").click();
+      doSpin();
     };
     if($("addc")) $("addc").onclick=async function(){
       var name=($("card").value||"").trim();
@@ -540,10 +572,11 @@ try {
       var tx=140+88*Math.cos(mid), ty=140+88*Math.sin(mid);
       parts.push('<text x="'+tx+'" y="'+ty+'" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="#1c160c">'+esc(cards[i]).slice(0,14)+'</text>');
     }
-    return '<svg class="wheel" viewBox="0 0 280 280" width="280" height="280">'+parts.join("")+'</svg>';
+    return '<svg viewBox="0 0 280 280" width="280" height="280">'+parts.join("")+'</svg>';
   }
 
   async function refresh(force){
+    if(spinning && !force) return;
     try{
       var path;
       if(viewOnly){
