@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import { neon } from "@neondatabase/serverless";
 
 const cors = {
@@ -5,6 +6,43 @@ const cors = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
+
+const FAMILY = [
+  "Something that starts with S",
+  "A leaf bigger than your hand",
+  "Four-legged neighbor, or tracks",
+  "A hidden path or shortcut",
+  "The color of the sky right now",
+];
+
+// Billing constants only. Caps and Stripe stay unused until ENFORCEMENT_ON=true.
+function enforcementOn() {
+  return String(process.env.ENFORCEMENT_ON || "false").toLowerCase() === "true";
+}
+
+const BILLING = {
+  whoPays: "host",
+  founderEmails: ["davidgoodmanauthor@gmail.com", "coldact45@gmail.com"],
+  squad: {
+    id: "squad",
+    name: "Squad",
+    priceCents: 699,
+    interval: "month",
+    includedPlayers: 10,
+  },
+  hardCeilingPlayers: 50,
+  trial: { days: 3, players: 5, hunts: 1 },
+  setupIntent: "one_dollar_auth_reverse",
+};
+
+function isFounderEmail(email) {
+  return BILLING.founderEmails.includes(String(email || "").trim().toLowerCase());
+}
+
+function assertHostAllowed() {
+  if (!enforcementOn()) return;
+  throw new Error("Billing enforcement is on but not wired yet.");
+}
 
 const SCHEMA = [
   `create table if not exists hunts (
@@ -25,6 +63,7 @@ const SCHEMA = [
     skip_ids text not null default '[]',
     declared_winner_id text not null default ''
   )`,
+  `alter table hunts add column if not exists spectator_token_hash text not null default ''`,
   `create table if not exists hunt_items (
     id text primary key,
     hunt_id text not null references hunts (id) on delete cascade,
@@ -55,10 +94,41 @@ const SCHEMA = [
     created_at timestamptz not null default now()
   )`,
   `create unique index if not exists submissions_player_item_idx on submissions (player_id, item_id)`,
+  `alter table hunts add column if not exists host_id text not null default ''`,
+  `create table if not exists plans (
+    id text primary key,
+    name text not null,
+    price_cents integer not null,
+    interval text not null default 'month',
+    included_players integer not null,
+    active boolean not null default true
+  )`,
+  `create table if not exists hosts (
+    id text primary key,
+    email text not null unique,
+    stripe_customer_id text not null default '',
+    card_fingerprint text not null default '',
+    plan_id text not null default 'squad',
+    status text not null default 'founder',
+    trial_started_at timestamptz,
+    trial_ends_at timestamptz,
+    trial_hunts_used integer not null default 0
+  )`,
+  `create table if not exists subscriptions (
+    id text primary key,
+    host_id text not null references hosts (id) on delete cascade,
+    stripe_subscription_id text not null default '',
+    plan_id text not null default 'squad',
+    status text not null default '',
+    created_at timestamptz not null default now()
+  )`,
 ];
 
 function sqlClient() {
-  const url = process.env.DATABASE_URL;
+  const url =
+    process.env.NETLIFY_DATABASE_URL ||
+    process.env.DATABASE_URL ||
+    process.env.NETLIFY_DATABASE_URL_UNPOOLED;
   if (!url) throw new Error("DATABASE_URL is missing.");
   return neon(url);
 }
@@ -68,6 +138,23 @@ async function ready(sql) {
   for (const stmt of SCHEMA) {
     if (typeof sql.query === "function") await sql.query(stmt);
     else await sql([stmt]);
+  }
+  await sql`
+    insert into plans (id, name, price_cents, interval, included_players, active)
+    values (${BILLING.squad.id}, ${BILLING.squad.name}, ${BILLING.squad.priceCents}, ${BILLING.squad.interval}, ${BILLING.squad.includedPlayers}, ${true})
+    on conflict (id) do update set
+      name = excluded.name,
+      price_cents = excluded.price_cents,
+      interval = excluded.interval,
+      included_players = excluded.included_players,
+      active = excluded.active
+  `;
+  for (const email of BILLING.founderEmails) {
+    const existing = await sql`select id from hosts where lower(email) = ${email} limit 1`;
+    if (!existing[0]) {
+      await sql`insert into hosts (id, email, plan_id, status)
+        values (${nid("host_")}, ${email}, ${BILLING.squad.id}, ${"founder"})`;
+    }
   }
   globalThis.__smSchema = true;
 }
@@ -84,6 +171,54 @@ function nid(prefix) {
   return prefix + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 }
 
+function hash(v) {
+  return createHash("sha256").update(String(v)).digest("hex");
+}
+
+function makeCode() {
+  const a = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  return Array.from(randomBytes(6), (b) => a[b % a.length]).join("");
+}
+
+async function requireHost(sql, code, token) {
+  const hunts = await sql`select * from hunts where join_code = ${code} limit 1`;
+  if (!hunts[0]) throw new Error("No hunt with that code.");
+  if (hunts[0].host_token_hash !== hash(token)) throw new Error("Host key does not match.");
+  return hunts[0];
+}
+
+async function hostBoard(sql, hunt) {
+  const items = await sql`select id, title, sort_order, points, list_no from hunt_items where hunt_id = ${hunt.id} order by list_no, sort_order`;
+  const players = await sql`select id, callsign, gift_card_pick, beat from players where hunt_id = ${hunt.id} order by joined_at`;
+  const subs = await sql`select id, player_id, item_id, status, note, char_length(photo_data) as bytes from submissions where hunt_id = ${hunt.id}`;
+  let extra = [];
+  try { extra = JSON.parse(hunt.gift_cards || "[]"); } catch { extra = []; }
+  if (!Array.isArray(extra)) extra = [];
+  const pts = Object.fromEntries(items.map((it) => [it.id, Math.max(1, Number(it.points) || 1)]));
+  const scored = players.map((p) => {
+    const mine = subs.filter((x) => x.player_id === p.id && x.status === "counted");
+    const points = mine.reduce((n, x) => n + (pts[x.item_id] || 1), 0);
+    return { ...p, points, counted: mine.length };
+  }).sort((a, b) => b.points - a.points || a.callsign.localeCompare(b.callsign));
+  return {
+    ok: true,
+    hunt: {
+      code: hunt.join_code,
+      status: hunt.status,
+      environment: hunt.environment,
+      potEnabled: hunt.pot_enabled,
+      potPerPlayer: hunt.pot_per_player,
+      potRemaining: hunt.pot_remaining,
+      adminName: hunt.admin_name,
+      declaredWinnerId: hunt.declared_winner_id || "",
+      giftCards: extra,
+    },
+    items,
+    players: scored,
+    submissions: subs,
+  };
+}
+
 export async function handler(event) {
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: cors, body: "" };
@@ -91,10 +226,12 @@ export async function handler(event) {
   try {
     const sql = sqlClient();
     await ready(sql);
+    const q = event.queryStringParameters || {};
 
     if (event.httpMethod === "GET") {
-      const sid = event.queryStringParameters?.sid || "";
-      const code = String(event.queryStringParameters?.c || "").toUpperCase();
+      const sid = q.sid || "";
+      const code = String(q.c || "").toUpperCase();
+      const token = String(q.t || "");
       if (sid) {
         const rows = await sql`select photo_data from submissions where id = ${sid} limit 1`;
         const data = rows[0]?.photo_data || "";
@@ -110,35 +247,202 @@ export async function handler(event) {
           isBase64Encoded: true,
         };
       }
+      if (code.length >= 4 && token.length >= 8) {
+        const hunt = await requireHost(sql, code, token);
+        return json(await hostBoard(sql, hunt));
+      }
+      const watch = String(q.w || "");
+      if (code.length >= 4 && watch.length >= 8) {
+        const hunts = await sql`select * from hunts where join_code = ${code} limit 1`;
+        if (!hunts[0] || !hunts[0].spectator_token_hash || hunts[0].spectator_token_hash !== hash(watch)) {
+          return json({ ok: false, error: "Spectator link is not valid." }, 403);
+        }
+        const board = await hostBoard(sql, hunts[0]);
+        board.viewOnly = true;
+        return json(board);
+      }
       if (code.length >= 4) {
         const hunts = await sql`select id, join_code, status, environment, pot_enabled, pot_per_player from hunts where join_code = ${code} limit 1`;
         if (!hunts[0]) return json({ ok: false, error: "No hunt with that code." }, 404);
         const items = await sql`select id, title, sort_order, points, list_no from hunt_items where hunt_id = ${hunts[0].id} order by list_no, sort_order`;
         return json({ ok: true, hunt: hunts[0], items });
       }
-      return json({ ok: true, locker: "neon" });
+      return json({
+        ok: true,
+        locker: "neon",
+        enforcement: enforcementOn(),
+        whoPays: BILLING.whoPays,
+        plan: BILLING.squad,
+      });
     }
 
     if (event.httpMethod !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
 
     const body = JSON.parse(event.body || "{}");
+    const action = String(body.a || body.action || "").toLowerCase();
+
+    if (action === "create") {
+      assertHostAllowed();
+      const name = String(body.n || body.name || "Host").trim().slice(0, 24) || "Host";
+      const env = ["family", "police", "fire", "office", "warehouse", "school", "other"].includes(body.e)
+        ? body.e
+        : "family";
+      const titles = (Array.isArray(body.i) ? body.i : FAMILY)
+        .map((t) => String(t || "").trim())
+        .filter((t) => t.length >= 2)
+        .slice(0, 80);
+      if (titles.length < 1) return json({ ok: false, error: "Add at least one find." }, 400);
+      const pot = Math.max(0, Math.min(100, Number(body.p) || 0));
+      const hostToken = randomBytes(18).toString("hex");
+      const watchToken = randomBytes(18).toString("hex");
+      const huntId = nid("h_");
+      let join = makeCode();
+      for (let n = 0; n < 6; n++) {
+        const exists = await sql`select id from hunts where join_code = ${join} limit 1`;
+        if (!exists[0]) break;
+        join = makeCode();
+      }
+      await sql`insert into hunts (id, join_code, host_token_hash, spectator_token_hash, title, admin_name, environment, pot_enabled, pot_per_player, pot_remaining, status)
+        values (${huntId}, ${join}, ${hash(hostToken)}, ${hash(watchToken)}, ${"Scavenger Master"}, ${name}, ${env}, ${pot > 0}, ${pot}, ${0}, ${"open"})`;
+      for (let n = 0; n < titles.length; n++) {
+        await sql`insert into hunt_items (id, hunt_id, sort_order, title, hint, points, list_no)
+          values (${nid("i_")}, ${huntId}, ${n}, ${titles[n]}, ${""}, ${1}, ${Math.floor(n / 5) + 1})`;
+      }
+      return json({ ok: true, code: join, hostToken, watchToken, items: titles, environment: env, pot });
+    }
+
+    if (action === "watch") {
+      const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+      const hunt = await requireHost(sql, code, String(body.t || ""));
+      const watchToken = randomBytes(18).toString("hex");
+      await sql`update hunts set spectator_token_hash = ${hash(watchToken)} where id = ${hunt.id}`;
+      return json({
+        ok: true,
+        token: watchToken,
+        url: "/host.html?c=" + encodeURIComponent(code) + "&w=" + encodeURIComponent(watchToken),
+      });
+    }
+
+    if (action === "grade") {
+      const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+      const hunt = await requireHost(sql, code, String(body.t || ""));
+      const status = body.s === "rejected" ? "rejected" : body.s === "pending" ? "pending" : "counted";
+      await sql`update submissions set status = ${status} where id = ${String(body.sid || "")} and hunt_id = ${hunt.id}`;
+      return json(await hostBoard(sql, hunt));
+    }
+
+    if (action === "close") {
+      const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+      const hunt = await requireHost(sql, code, String(body.t || ""));
+      const next = hunt.status === "closed" ? "open" : "closed";
+      await sql`update hunts set status = ${next} where id = ${hunt.id}`;
+      hunt.status = next;
+      return json(await hostBoard(sql, hunt));
+    }
+
+    if (action === "additems") {
+      const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+      const hunt = await requireHost(sql, code, String(body.t || ""));
+      const titles = (Array.isArray(body.i) ? body.i : [])
+        .map((t) => String(t || "").trim())
+        .filter((t) => t.length >= 2)
+        .slice(0, 20);
+      if (!titles.length) return json({ ok: false, error: "Add at least one find." }, 400);
+      const last = await sql`select coalesce(max(sort_order), -1) as m, coalesce(max(list_no), 0) as l from hunt_items where hunt_id = ${hunt.id}`;
+      const start = Number(last[0]?.m) + 1;
+      const listNo = Number(last[0]?.l) + 1;
+      for (let n = 0; n < titles.length; n++) {
+        await sql`insert into hunt_items (id, hunt_id, sort_order, title, hint, points, list_no)
+          values (${nid("i_")}, ${hunt.id}, ${start + n}, ${titles[n]}, ${""}, ${1}, ${listNo})`;
+      }
+      return json(await hostBoard(sql, hunt));
+    }
+
+    if (action === "saveitems") {
+      const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+      const hunt = await requireHost(sql, code, String(body.t || ""));
+      const rows = Array.isArray(body.items) ? body.items : [];
+      for (const row of rows) {
+        const id = String(row.id || "");
+        const title = String(row.title || "").trim().slice(0, 120);
+        const points = Math.max(1, Math.min(20, Number(row.points) || 1));
+        if (!id || title.length < 2) continue;
+        await sql`update hunt_items set title = ${title}, points = ${points} where id = ${id} and hunt_id = ${hunt.id}`;
+      }
+      return json(await hostBoard(sql, hunt));
+    }
+
+    if (action === "addcard") {
+      const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+      const hunt = await requireHost(sql, code, String(body.t || ""));
+      const name = String(body.card || "").trim().slice(0, 40);
+      if (name.length < 2) return json({ ok: false, error: "Name the gift card." }, 400);
+      let extra = [];
+      try { extra = JSON.parse(hunt.gift_cards || "[]"); } catch { extra = []; }
+      if (!Array.isArray(extra)) extra = [];
+      extra.push(name);
+      await sql`update hunts set gift_cards = ${JSON.stringify(extra)} where id = ${hunt.id}`;
+      hunt.gift_cards = JSON.stringify(extra);
+      return json(await hostBoard(sql, hunt));
+    }
+
+    if (action === "winner") {
+      const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+      const hunt = await requireHost(sql, code, String(body.t || ""));
+      const pid = String(body.pid || "");
+      await sql`update hunts set declared_winner_id = ${pid} where id = ${hunt.id}`;
+      hunt.declared_winner_id = pid;
+      return json(await hostBoard(sql, hunt));
+    }
+
+    if (action === "deduct") {
+      const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+      const hunt = await requireHost(sql, code, String(body.t || ""));
+      const next = Math.max(0, Number(hunt.pot_remaining || 0) + (Number(hunt.pot_per_player || 0) * 0) - 10);
+      const remain = Math.max(0, Number(body.remain != null ? body.remain : (hunt.pot_remaining || 0) - 10));
+      await sql`update hunts set pot_remaining = ${remain} where id = ${hunt.id}`;
+      hunt.pot_remaining = remain;
+      return json(await hostBoard(sql, hunt));
+    }
+
+    if (action === "join") {
+      const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+      const callsign = String(body.n || "").trim().slice(0, 32);
+      const giftCard = String(body.s || "").trim().slice(0, 40);
+      const beat = String(body.b || "").trim().slice(0, 24);
+      if (!code || callsign.length < 2) return json({ ok: false, error: "Name and code required." }, 400);
+      const hunts = await sql`select id, status from hunts where join_code = ${code} limit 1`;
+      if (!hunts[0]) return json({ ok: false, error: "No hunt with that code." }, 404);
+      if (hunts[0].status === "closed") return json({ ok: false, error: "This hunt is closed." }, 400);
+      const gift = giftCard === "-" ? "" : giftCard;
+      let players = await sql`select id from players where hunt_id = ${hunts[0].id} and lower(callsign) = ${callsign.toLowerCase()} limit 1`;
+      if (!players[0]) {
+        const pid = nid("p_");
+        await sql`insert into players (id, hunt_id, token_hash, callsign, gift_card_pick, beat)
+          values (${pid}, ${hunts[0].id}, ${nid("t_")}, ${callsign}, ${gift}, ${beat})`;
+      } else {
+        await sql`update players set gift_card_pick = ${gift}, beat = ${beat || ""} where id = ${players[0].id}`;
+      }
+      return json({ ok: true, joined: true });
+    }
+
     const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
     const callsign = String(body.n || "").trim().slice(0, 32);
     const giftCard = String(body.s || "").trim().slice(0, 40);
     const beat = String(body.b || "").trim().slice(0, 24);
     const itemIndex = Number(body.i) || 0;
     const inBeat = body.ib === "in" || body.ib === "out" ? body.ib : "";
-    let photo = String(body.p || "");
+    const photo = String(body.p || "");
     if (!code || callsign.length < 2) return json({ ok: false, error: "Name and code required." }, 400);
     if (!photo.startsWith("data:image/") || photo.length < 64) return json({ ok: false, error: "Missing still." }, 400);
-    if (photo.length > 900_000) return json({ ok: false, error: "Photo is too large." }, 400);
+    if (photo.length > 900000) return json({ ok: false, error: "Photo is too large." }, 400);
 
     const hunts = await sql`select id, status from hunts where join_code = ${code} limit 1`;
     if (!hunts[0]) return json({ ok: false, error: "No hunt with that code." }, 404);
     if (hunts[0].status === "closed") return json({ ok: false, error: "This hunt is closed." }, 400);
 
     const items = await sql`select id from hunt_items where hunt_id = ${hunts[0].id} order by list_no, sort_order`;
-    const item = items[Math.max(0, itemIndex - 1)] || items[itemIndex] || items[0];
+    const item = items[itemIndex] || items[Math.max(0, itemIndex - 1)] || items[0];
     if (!item) return json({ ok: false, error: "That item is not on this hunt." }, 400);
 
     let players = await sql`select id from players where hunt_id = ${hunts[0].id} and lower(callsign) = ${callsign.toLowerCase()} limit 1`;
