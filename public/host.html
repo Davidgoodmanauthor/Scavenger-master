@@ -39,7 +39,7 @@ textarea{min-height:88px}
 .item{display:grid;grid-template-columns:1fr 64px;gap:8px;margin:8px 0;align-items:center}
 .item b{grid-column:1/-1;font-size:12px;color:var(--muted)}
 .wheelwrap{position:relative;width:280px;height:280px;margin:18px auto}
-.wheel{width:280px;height:280px;border-radius:50%;overflow:hidden;transition:transform 4.8s cubic-bezier(.12,.78,.08,1)}
+.wheel{width:280px;height:280px;border-radius:50%;overflow:hidden;transform-origin:50% 50%;transition:transform 5.2s cubic-bezier(.08,.82,.1,1)}
 .peg{position:absolute;left:50%;top:-8px;width:0;height:0;border-left:14px solid transparent;border-right:14px solid transparent;border-top:26px solid var(--gold);transform:translateX(-50%);z-index:3;filter:drop-shadow(0 1px 2px #000);pointer-events:none}
 .player{margin:12px 0}
 .player .who{font-size:15px;margin-bottom:8px}
@@ -504,17 +504,19 @@ try {
         admin(out);
       }catch(e){ $("reveal").textContent=e.message||"Reveal failed"; }
     };
-    var last=lastLand;
     function setWheel(animated){
       var w=$("wheel");
       if(!w) return;
       if(!animated){
         w.style.transition="none";
+        w.style.webkitTransition="none";
         w.style.transform="rotate("+spinR+"deg)";
-        w.getBoundingClientRect();
+        void w.offsetWidth;
         w.style.transition="";
+        w.style.webkitTransition="";
       }else{
-        w.style.transition="transform 4.8s cubic-bezier(.12,.78,.08,1)";
+        w.style.transition="transform 5.2s cubic-bezier(.08,.82,.1,1)";
+        w.style.webkitTransition="transform 5.2s cubic-bezier(.08,.82,.1,1)";
         w.style.transform="rotate("+spinR+"deg)";
       }
     }
@@ -525,25 +527,32 @@ try {
       }
       setWheel(false);
     }
+    function rnd(){
+      try{ return crypto.getRandomValues(new Uint32Array(1))[0]/4294967296; }
+      catch(e){ return Math.random(); }
+    }
     function doSpin(){
       if(!cards.length || spinning) return;
       spinning=true;
+      if($("spin")) $("spin").textContent="Spinning…";
       var n=cards.length;
       var slice=360/n;
-      var idx=Math.floor(Math.random()*n);
-      var center=idx*slice+slice/2;
-      var target=(360-center)%360;
+      var idx=Math.floor(rnd()*n);
+      var within=slice*(0.22+rnd()*0.56);
+      var landAt=idx*slice+within;
+      var target=((360-landAt)%360+360)%360;
       var cur=((spinR%360)+360)%360;
       var delta=(target-cur+360)%360;
-      if(delta<20) delta+=360;
-      spinR+=1440+delta;
+      var turns=5+Math.floor(rnd()*4);
+      if(delta<8) delta+=360;
+      spinR+=turns*360+delta;
       setWheel(true);
       setTimeout(function(){
         spinning=false;
-        last=cards[idx];
-        lastLand=last;
-        if($("land")) $("land").textContent="Pointer is on "+last;
-      }, 4900);
+        lastLand=cards[idx];
+        if($("land")) $("land").textContent="Pointer is on "+lastLand;
+        if($("spin")) $("spin").textContent="Spin";
+      }, 5300);
     }
     if($("spin")) $("spin").onclick=doSpin;
     if($("accept")) $("accept").onclick=function(){ $("land").textContent=lastLand?("Winner takes "+lastLand):"Spin first."; };
@@ -592,6 +601,10 @@ try {
       ]);
       if(!out.ok) throw new Error(out.error||"Could not load.");
       boardCache=out;
+      if(!force && $("wheel")){
+        var stay=viewOnly?viewTab:((load().tab)||"hunt");
+        if(stay==="pot") return;
+      }
       admin(out);
     }catch(err){
       $("app").innerHTML='<div class="card"><p class="bad">'+(err.message||"Could not load board.")+'</p>'
