@@ -27,7 +27,9 @@ h1{font-size:32px;line-height:1.1;margin:18px 0 8px;font-weight:700}
 .gold-line{color:var(--gold);letter-spacing:.04em}
 .sub{color:var(--muted);font-size:15px;line-height:1.5;margin:0}
 .hero{margin:18px 0 8px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--card)}
-.hero img{display:block;width:100%;height:160px;object-fit:cover}
+.hero img{display:block;width:100%;height:180px;object-fit:cover}
+.strip{display:flex;gap:6px;margin:10px 0 0;overflow:auto}
+.strip img{width:72px;height:52px;object-fit:cover;border-radius:8px;flex:0 0 auto;border:1px solid var(--line)}
 .card{border:1px solid var(--line);background:var(--card);border-radius:14px;padding:16px;margin-top:18px}
 label{display:block;margin:0 0 8px;font-size:14px}
 input,button{font:inherit}
@@ -47,13 +49,36 @@ a{color:var(--gold)}
 </header>
 <h1>Real World<br/><span class="gold-line">Scavenger Hunt</span></h1>
 <p class="sub">A REAL photo hunt. Not a map game. You find it, you photograph it, the host scores it.</p>
-<div class="hero"><img src="/og.jpg" alt="Scavenger Master"/></div>
+<div class="hero"><img src="/banners/police.jpg" alt="Scavenger Master K9" onerror="this.onerror=null;this.src='/og.jpg'"/></div>
+<div class="strip" aria-hidden="true">
+  <img src="/banners/family.jpg" alt=""/>
+  <img src="/banners/fire.jpg" alt=""/>
+  <img src="/banners/office.jpg" alt=""/>
+  <img src="/banners/warehouse.jpg" alt=""/>
+  <img src="/banners/school.jpg" alt=""/>
+  <img src="/banners/other.jpg" alt=""/>
+</div>
 <div class="card">
   <label for="code">Got a hunt code? Open the player</label>
   <form id="join" action="/play.html" method="get">
     <input id="code" name="c" type="text" maxlength="8" autocomplete="off" autocapitalize="characters" placeholder="YOUR CODE" required/>
     <button class="gold" type="submit">Open hunt</button>
   </form>
+</div>
+<div class="card">
+  <div class="brand">Game master</div>
+  <p class="sub" style="margin:8px 0 0">Start a hunt. Pick police, fire, family, or the other work lists. A code is made. You text the player link. This locker is not the squad hunt.</p>
+  <a class="gold" href="/host.html?new=1" style="display:flex;align-items:center;justify-content:center;text-decoration:none;margin-top:12px">Start a new hunt</a>
+  <a class="gold" href="/host.html" style="display:flex;align-items:center;justify-content:center;text-decoration:none;margin-top:10px;background:transparent;border:1px solid var(--line);color:var(--fg)">Open the hunt on this phone</a>
+</div>
+<div class="card" id="hosted" style="display:none">
+  <div class="brand">Hunts this phone is running</div>
+  <p class="sub">If you are admin for more than one squad, tap that hunt’s code. Only hunts this phone started show here.</p>
+  <div class="row" id="huntlist" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px"></div>
+  <label for="hostcode" style="margin-top:14px">Open by code</label>
+  <input id="hostcode" type="text" maxlength="8" autocomplete="off" autocapitalize="characters" placeholder="UDN3YN"/>
+  <button class="gold" id="openhost" type="button">Open that admin</button>
+  <p class="sub" id="hosterr"></p>
 </div>
 <div class="card">
   <div class="brand">How it works</div>
@@ -64,7 +89,7 @@ a{color:var(--gold)}
     <li><span class="n">4</span><span>They score the photos. Play for fun, or play for stakes — the cash stays in a real pot the game master holds. Nothing is charged in this app. If you play for a gift card, each player names a store. Those names go on a wheel. Winner takes whatever it lands on.</span></li>
   </ol>
 </div>
-<p class="foot">Photograph · Score · Spin</p>
+<p class="foot">Photograph · Score · Spin<br/><a href="/privacy.html" style="letter-spacing:0;text-transform:none;font-size:12px">Privacy</a></p>
 <script>
 (function(){
   var html=document.documentElement;
@@ -84,6 +109,43 @@ a{color:var(--gold)}
     if(v.length<4){ e.preventDefault(); el.focus(); return; }
     el.value=v;
   });
+  var LIST="sm.host.fyi.list";
+  var CUR="sm.host.fyi";
+  function loadList(){
+    var list={};
+    try{ list=JSON.parse(localStorage.getItem(LIST)||"{}")||{}; }catch(e){ list={}; }
+    try{
+      var cur=JSON.parse(localStorage.getItem(CUR)||"{}");
+      if(cur && cur.code && cur.hostToken){
+        list[cur.code]=list[cur.code]||{code:cur.code,hostToken:cur.hostToken,env:cur.env||"",at:Date.now()};
+        localStorage.setItem(LIST, JSON.stringify(list));
+      }
+    }catch(e){}
+    return list;
+  }
+  function openAdmin(code){
+    var list=loadList();
+    var h=list[String(code||"").replace(/[^a-zA-Z0-9]/g,"").toUpperCase()];
+    var err=document.getElementById("hosterr");
+    if(!h){ if(err) err.textContent="This phone did not start that hunt. Only the phone that started it can open that admin."; return; }
+    localStorage.setItem(CUR, JSON.stringify({code:h.code,hostToken:h.hostToken,env:h.env||"",name:h.name||"",tab:"hunt"}));
+    location.href="/host.html";
+  }
+  var list=loadList();
+  var codes=Object.keys(list).sort(function(a,b){return (list[b].at||0)-(list[a].at||0);});
+  if(codes.length){
+    var box=document.getElementById("hosted");
+    var row=document.getElementById("huntlist");
+    box.style.display="block";
+    codes.forEach(function(c){
+      var b=document.createElement("button");
+      b.type="button"; b.className="chip"; b.textContent=c;
+      b.style.cssText="border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:999px;padding:8px 12px;font-size:14px";
+      b.onclick=function(){ openAdmin(c); };
+      row.appendChild(b);
+    });
+    document.getElementById("openhost").onclick=function(){ openAdmin(document.getElementById("hostcode").value); };
+  }
 })();
 </script>
 </body>
