@@ -54,6 +54,11 @@ textarea{min-height:88px}
 #ov h2{font-size:20px;margin:8px 0 4px}
 #ov .who{color:var(--gold)}
 #ov img{width:100%;max-height:62vh;object-fit:contain;border-radius:10px;background:#111}
+#boom{display:none;position:fixed;inset:0;z-index:50;background:rgba(12,11,8,.96);align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:24px}
+#boom.on{display:flex}
+#boom .kicker{font-size:14px;letter-spacing:.28em;text-transform:uppercase;color:var(--gold);font-weight:700}
+#boom .name{font-size:clamp(36px,12vw,72px);font-weight:800;line-height:1.05;margin:18px 0 8px;animation:bam .7s cubic-bezier(.12,.8,.2,1.2)}
+@keyframes bam{from{transform:scale(.35);opacity:0}to{transform:scale(1);opacity:1}}
 a{color:var(--gold)}
 </style>
 </head>
@@ -67,6 +72,7 @@ a{color:var(--gold)}
 </header>
 <div id="app"><p class="sub">Opening host…</p></div>
 <div id="ov"></div>
+<div id="boom"></div>
 <script>
 (function(){
 try {
@@ -89,6 +95,7 @@ try {
   var watchCode="";
   var watchKey="";
   var viewTab="scores";
+  var lastBoom="";
   function load(){try{return JSON.parse(localStorage.getItem(K)||"{}")}catch(e){return {}}}
   function loadList(){try{return JSON.parse(localStorage.getItem(LIST)||"{}")}catch(e){return {}}}
   function remember(s){
@@ -253,6 +260,10 @@ try {
     if(tab==="hunt") paneHunt(pane, s, hunt, items, players);
     else if(tab==="pot") panePot(pane, s, hunt, players);
     else paneScores(pane, s, hunt, items, players, subs);
+    if(hunt.winnerRevealed && hunt.declaredWinnerId && lastBoom!==hunt.declaredWinnerId){
+      var w=players.find(function(p){return p.id===hunt.declaredWinnerId;});
+      if(w){ lastBoom=hunt.declaredWinnerId; showBoom(w.callsign); }
+    }
   }
 
   function paneHunt(pane, s, hunt, items, players){
@@ -376,7 +387,8 @@ try {
       html+='<div class="card player"><div class="who"><b>'+esc(p.callsign)+'</b> · '+p.points+' pts · '+p.counted+' counted'
         +(p.gift_card_pick?' · '+esc(p.gift_card_pick):'')
         +(p.beat?' · Beat '+esc(p.beat):'')
-        +(hunt.declaredWinnerId===p.id?' · Winner':'')
+        +(!viewOnly && hunt.declaredWinnerId===p.id && !hunt.winnerRevealed?' · Picked for reveal':'')
+        +(hunt.winnerRevealed && hunt.declaredWinnerId===p.id?' · Winner':'')
         +'</div><div class="film">';
       items.forEach(function(it, idx){
         var sub=subs.find(function(x){return x.player_id===p.id && x.item_id===it.id});
@@ -388,7 +400,7 @@ try {
         else html+='—';
         html+='</button>';
       });
-      html+='</div>'+(viewOnly?'':'<button class="ghost" data-win="'+esc(p.id)+'" type="button">Reveal this winner</button>')+'</div>';
+      html+='</div>'+(viewOnly?'':'<button class="ghost" data-win="'+esc(p.id)+'" type="button">'+(hunt.declaredWinnerId===p.id && !hunt.winnerRevealed?'Picked — go reveal':'This is the winner')+'</button>')+'</div>';
     });
     pane.innerHTML=html;
     pane.querySelectorAll("[data-open]").forEach(function(btn){
@@ -408,6 +420,15 @@ try {
         boardCache=out; s.tab="pot"; save(s); admin(out);
       };
     });
+  }
+
+  function showBoom(name){
+    var boom=$("boom");
+    if(!boom) return;
+    boom.className="on";
+    boom.innerHTML='<div class="kicker">Scavenger Master winner</div><div class="name">'+esc(name||"")+'</div><p class="sub">Then spin the wheel.</p>';
+    setTimeout(function(){ boom.className=""; }, 4200);
+    boom.onclick=function(){ boom.className=""; };
   }
 
   function listPreview(items){
@@ -439,42 +460,48 @@ try {
 
   function panePot(pane, s, hunt, players){
     var winner=players.find(function(p){return p.id===hunt.declaredWinnerId;});
+    var shown=!!(winner && hunt.winnerRevealed);
     var cards=[];
     players.forEach(function(p){ if(p.gift_card_pick) cards.push(p.gift_card_pick); });
     (hunt.giftCards||[]).forEach(function(c){ cards.push(c); });
-    if(!cards.length){
-      var html='<div class="card">';
-      if(winner) html+='<h1>Scavenger Master winner</h1><p class="code">'+esc(winner.callsign)+'</p>';
-      else html+='<p class="sub">Pick the winner on Scores first. The name stays hidden until then.</p>';
-      var pot=Number(hunt.potPerPlayer||s.pot||0)*Math.max(1, players.length);
-      if(hunt.potRemaining) pot=hunt.potRemaining;
-      html+='<p class="sub">Pot display $'+pot+'. Cash stays in the real pot. Nothing is charged here.</p></div>';
-      html+=(viewOnly?'':'<div class="card"><label>Add another gift card to the wheel</label><input id="card" maxlength="40" placeholder="Local shop"/><button class="ghost" id="addc" type="button">Add to wheel</button></div>');
-      pane.innerHTML=html;
-      if($("addc")) $("addc").onclick=async function(){
-        var name=($("card").value||"").trim();
-        if(name.length<2) return;
-        var out=await post({a:"addcard",c:s.code,t:s.hostToken,card:name});
-        boardCache=out; admin(out);
-      };
-      return;
-    }
     var pot=Number(hunt.potPerPlayer||s.pot||0)*Math.max(1, players.length);
     if(hunt.potRemaining) pot=hunt.potRemaining;
     var html='<div class="card">';
-    if(winner) html+='<h1>Scavenger Master winner</h1><p class="code">'+esc(winner.callsign)+'</p>';
-    else html+='<p class="sub">Pick the winner on Scores first. The name stays hidden until then.</p>';
+    if(shown){
+      html+='<p class="sub" style="letter-spacing:.22em;text-transform:uppercase;color:var(--gold);font-weight:700">Scavenger Master winner</p>';
+      html+='<h1 style="font-size:42px;line-height:1.05;margin:8px 0 12px">'+esc(winner.callsign)+'</h1>';
+    }else if(winner && !viewOnly){
+      html+='<p class="sub">Winner is picked. Cast this page. Names stay hidden until you hit Reveal.</p>';
+      html+='<button class="gold" id="reveal" type="button">Reveal winner</button>';
+    }else if(winner && viewOnly){
+      html+='<p class="sub">Waiting for the host to reveal the winner.</p>';
+    }else{
+      html+='<p class="sub">On Scores, tap This is the winner. Then come here, cast the screen, and hit Reveal.</p>';
+    }
     html+='<p class="sub">Pot display $'+pot+'. Cash stays in the real pot. Nothing is charged here.</p></div>';
-    html+='<div class="wheelwrap"><div class="peg"></div><div class="wheel" id="wheel">'+wheelSvg(cards)+'</div></div>';
-    html+='<p class="sub" id="land" style="text-align:center">The gold pointer is the marker.</p>';
+    if(cards.length){
+      html+='<div class="wheelwrap"><div class="peg"></div><div class="wheel" id="wheel">'+wheelSvg(cards)+'</div></div>';
+      html+='<p class="sub" id="land" style="text-align:center">The gold pointer is the marker.</p>';
+    }
     if(!viewOnly){
-      html+='<button class="gold" id="spin" type="button">Spin</button>';
-      html+='<button class="ghost" id="accept" type="button">Accept this gift card</button>';
-      html+='<button class="ghost" id="deduct" type="button">No — deduct $10 and re-spin</button>';
+      if(shown && cards.length){
+        html+='<button class="gold" id="spin" type="button">Spin</button>';
+        html+='<button class="ghost" id="accept" type="button">Accept this gift card</button>';
+        html+='<button class="ghost" id="deduct" type="button">No — deduct $10 and re-spin</button>';
+      }
       html+='<div class="card"><label>Add another gift card to the wheel</label><input id="card" maxlength="40" placeholder="Local shop"/>'
         +'<button class="ghost" id="addc" type="button">Add to wheel</button></div>';
     }
     pane.innerHTML=html;
+    if($("reveal")) $("reveal").onclick=async function(){
+      $("reveal").textContent="Revealing…";
+      try{
+        var out=await post({a:"reveal",c:s.code,t:s.hostToken});
+        boardCache=out;
+        lastBoom="";
+        admin(out);
+      }catch(e){ $("reveal").textContent=e.message||"Reveal failed"; }
+    };
     var last="";
     if($("spin")) $("spin").onclick=function(){
       spinR += 1080 + Math.floor(Math.random()*360);
@@ -490,7 +517,7 @@ try {
     if($("accept")) $("accept").onclick=function(){ $("land").textContent=last?("Winner takes "+last):"Spin first."; };
     if($("deduct")) $("deduct").onclick=async function(){
       try{ await post({a:"deduct",c:s.code,t:s.hostToken,remain:Math.max(0,pot-10)}); }catch(e){}
-      $("spin").click();
+      if($("spin")) $("spin").click();
     };
     if($("addc")) $("addc").onclick=async function(){
       var name=($("card").value||"").trim();

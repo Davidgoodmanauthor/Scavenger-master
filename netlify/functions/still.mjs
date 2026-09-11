@@ -307,6 +307,7 @@ const SCHEMA = [
     declared_winner_id text not null default ''
   )`,
   `alter table hunts add column if not exists spectator_token_hash text not null default ''`,
+  `alter table hunts add column if not exists winner_revealed boolean not null default false`,
   `create table if not exists hunt_items (
     id text primary key,
     hunt_id text not null references hunts (id) on delete cascade,
@@ -456,6 +457,7 @@ async function hostBoard(sql, hunt) {
       potRemaining: hunt.pot_remaining,
       adminName: hunt.admin_name,
       declaredWinnerId: hunt.declared_winner_id || "",
+      winnerRevealed: !!hunt.winner_revealed,
       giftCards: extra,
     },
     items,
@@ -648,8 +650,18 @@ export async function handler(event) {
       const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
       const hunt = await requireHost(sql, code, String(body.t || ""));
       const pid = String(body.pid || "");
-      await sql`update hunts set declared_winner_id = ${pid} where id = ${hunt.id}`;
+      await sql`update hunts set declared_winner_id = ${pid}, winner_revealed = ${false} where id = ${hunt.id}`;
       hunt.declared_winner_id = pid;
+      hunt.winner_revealed = false;
+      return json(await hostBoard(sql, hunt));
+    }
+
+    if (action === "reveal") {
+      const code = String(body.c || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 8);
+      const hunt = await requireHost(sql, code, String(body.t || ""));
+      if (!hunt.declared_winner_id) return json({ ok: false, error: "Pick the winner on Scores first." }, 400);
+      await sql`update hunts set winner_revealed = ${true} where id = ${hunt.id}`;
+      hunt.winner_revealed = true;
       return json(await hostBoard(sql, hunt));
     }
 
