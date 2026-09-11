@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#0c0b08"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-title" content="Scavenger Master"/>
+<title>Scavenger Master · Host</title>
+<style>
+:root{--bg:#0c0b08;--fg:#f3ead4;--muted:#b7a88a;--gold:#c9a227;--goldfg:#1c160c;--card:#16130e;--line:#3a3326}
+html.day{--bg:#f6f0e4;--fg:#1c160c;--muted:#6b5c3e;--gold:#a07d12;--goldfg:#fff8e7;--card:#fffaf0;--line:#d9ccb0}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,sans-serif}
+body{padding:16px 14px 72px;max-width:30rem;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.brand{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--gold);font-weight:700}
+.toggle{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:8px 12px}
+h1{font-size:26px;margin:12px 0 6px}
+.sub{color:var(--muted);font-size:14px;line-height:1.45}
+.card{border:1px solid var(--line);background:var(--card);border-radius:14px;padding:14px;margin:12px 0}
+label{display:block;margin:10px 0 6px;font-size:14px}
+input,textarea,button{font:inherit}
+input,textarea{width:100%;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:10px 12px}
+textarea{min-height:88px}
+.gold,.ghost{width:100%;height:48px;margin-top:10px;border-radius:8px;font-weight:700}
+.gold{border:0;background:var(--gold);color:var(--goldfg)}
+.ghost{border:1px solid var(--line);background:transparent;color:var(--fg)}
+.tabs{display:flex;gap:6px;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:8}
+.tabs button{flex:1;height:42px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)}
+.tabs button.on{background:var(--gold);color:var(--goldfg);border-color:var(--gold)}
+.code{font-family:ui-monospace,monospace;letter-spacing:.12em;color:var(--gold)}
+.find{border:1px solid var(--line);border-radius:12px;padding:10px;margin:10px 0}
+.find img{width:100%;border-radius:8px;display:block;margin:8px 0;max-height:240px;object-fit:cover}
+#envpic{width:100%;height:150px;object-fit:cover;border-radius:12px;display:block;margin:10px 0;border:1px solid var(--line)}
+.row{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:999px;padding:8px 12px;font-size:14px}
+.chip.on{background:var(--gold);color:var(--goldfg);border-color:var(--gold)}
+.bad{color:#d98b8b}
+.item{display:grid;grid-template-columns:1fr 64px;gap:8px;margin:8px 0;align-items:center}
+.item b{grid-column:1/-1;font-size:12px;color:var(--muted)}
+.wheelwrap{position:relative;width:280px;height:280px;margin:18px auto}
+.wheel{width:280px;height:280px;border-radius:50%;transition:transform 3.2s cubic-bezier(.12,.7,.1,1)}
+.peg{position:absolute;left:50%;top:-6px;width:0;height:0;border-left:12px solid transparent;border-right:12px solid transparent;border-top:22px solid var(--gold);transform:translateX(-50%);z-index:3;filter:drop-shadow(0 1px 2px #000)}
+.player{margin:12px 0}
+.player .who{font-size:15px;margin-bottom:8px}
+.film{display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 0 10px}
+.thumb{flex:0 0 72px;width:72px;height:72px;border-radius:10px;border:2px solid var(--line);background:#1a1712;overflow:hidden;position:relative;padding:0;appearance:none;-webkit-appearance:none}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.thumb .n{position:absolute;left:4px;top:4px;font-size:10px;background:rgba(0,0,0,.65);color:#fff;border-radius:6px;padding:1px 5px}
+.thumb.wait{border-color:var(--gold)}
+.thumb.ok{border-color:#7dce8a}
+.thumb.no{border-color:#d98b8b;opacity:.7}
+.thumb.empty{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px}
+#ov h2{font-size:20px;margin:8px 0 4px}
+#ov .who{color:var(--gold)}
+#ov img{width:100%;max-height:62vh;object-fit:contain;border-radius:10px;background:#111}
+a{color:var(--gold)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Scavenger Master</div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <a href="/billing.html" style="color:var(--gold);font-size:13px;text-decoration:none">Billing</a>
+    <button class="toggle" id="mode" type="button">Day</button>
+  </div>
+</header>
+<div id="app"><p class="sub">Opening host…</p></div>
+<div id="ov"></div>
+<script>
+(function(){
+try {
+
+  var ENVS={
+    police:{name:"Police",blurb:"Finds on the street. Beat is required. In beat or not in beat on each still.",items:["A landmark on your beat","Something older than the radio","A quiet street at its best","Proof you stopped for coffee","A view you'd never write up"]},
+    fire:{name:"Fire and EMS",blurb:"House, bay, and the quiet between calls.",items:["The engine that would roll first","Something that still shines after a long shift","A door you hope you never need","The kitchen at its honest hour","A view from the bay"]},
+    office:{name:"Office",blurb:"For the crew that lives under fluorescent lights.",items:["Oldest object still in use","A plant that's surviving","Something that shouldn't be that color","The best snack stash","A door nobody uses"]},
+    warehouse:{name:"Warehouse",blurb:"Aisles, docks, and whatever does not belong.",items:["A pallet you'd know in the dark","Oldest equipment still working","A safety sign that's seen some years","The dock at its quietest","Something that does not belong in this aisle"]},
+    school:{name:"School or teachers",blurb:"Hallways, rooms, and the coffee situation.",items:["A hallway at its quietest","Something left behind","The oldest poster still on a wall","A classroom light with a story","The teacher's coffee situation"]},
+    family:{name:"Family and friends",blurb:"Kids, dogs, and whoever wandered over after dinner.",items:["Something that starts with S","A leaf bigger than your hand","Four-legged neighbor, or tracks","A hidden path or shortcut","The color of the sky right now"]},
+    other:{name:"Other",blurb:"Anywhere. Rewrite the list to fit.",items:["Something red","A number in the wild","Something that makes a sound","A reflection","The farthest thing you can walk to in five minutes"]}
+  };
+  var ORDER=["police","fire","office","warehouse","school","family","other"];
+  var K="sm.host.fyi";
+  var LIST="sm.host.fyi.list";
+  var boardCache=null;
+  var spinR=0;
+  var viewOnly=false;
+  var watchCode="";
+  var watchKey="";
+  var viewTab="scores";
+  function load(){try{return JSON.parse(localStorage.getItem(K)||"{}")}catch(e){return {}}}
+  function loadList(){try{return JSON.parse(localStorage.getItem(LIST)||"{}")}catch(e){return {}}}
+  function remember(s){
+    if(!s||!s.code||!s.hostToken) return;
+    var list=loadList();
+    list[s.code]={code:s.code,hostToken:s.hostToken,watchToken:s.watchToken||"",env:s.env||s.pick||"",name:s.name||"",at:Date.now()};
+    localStorage.setItem(LIST,JSON.stringify(list));
+  }
+  function save(s){localStorage.setItem(K,JSON.stringify(s)); remember(s);}
+  remember(load());
+  function $(id){return document.getElementById(id)}
+  function apply(day){
+    document.documentElement.classList.toggle("day",day);
+    $("mode").textContent=day?"Night":"Day";
+  }
+  $("mode").onclick=function(){apply(!document.documentElement.classList.contains("day"))};
+  apply(false);
+  async function api(path, opt){
+    var r=await fetch("/api/still"+path, opt||{});
+    var t=await r.text();
+    try{return JSON.parse(t)}catch(e){ throw new Error(t||"Bad reply"); }
+  }
+  function post(body){
+    return api("",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  }
+  function invite(s, items){
+    var titles=(items||s.items||[]).map(function(x){return typeof x==="string"?x:(x.title||"");}).filter(Boolean);
+    var d=encodeURIComponent([s.code,s.env||"family",String(s.pot||0),titles.join("~")].join("|"));
+    return location.origin+"/play.html?d="+d;
+  }
+  function text(s, items){
+    return "Scavenger Master — open this as a player:\n"+invite(s, items);
+  }
+  function esc(v){
+    return String(v||"").replace(/[&<>"']/g,function(c){
+      if(c==="&") return "&"+"amp;";
+      if(c==="<") return "&"+"lt;";
+      if(c===">") return "&"+"gt;";
+      if(c==='"') return "&"+"quot;";
+      return "&"+"#39;";
+    });
+  }
+
+  function switchHunt(code){
+    var h=loadList()[String(code||"").toUpperCase()];
+    if(!h){
+      if($("hosterr")) $("hosterr").textContent="This phone did not start that hunt. Only the phone that started it can open that admin.";
+      return;
+    }
+    save({code:h.code,hostToken:h.hostToken,watchToken:h.watchToken||"",env:h.env,name:h.name,tab:"hunt"});
+    location.href="/host.html";
+  }
+
+  function startScreen(){
+    var s=load();
+    var env=s.pick||"police";
+    var rows=(s.draft&&s.draft.length)?s.draft:ENVS[env].items.slice();
+    var app=$("app");
+    var list=loadList();
+    var codes=Object.keys(list).sort(function(a,b){return (list[b].at||0)-(list[a].at||0);});
+    var roster="";
+    if(codes.length){
+      roster='<div class="card"><p class="sub">Hunts this phone is running. Tap a code to open that admin board.</p><div class="row" id="roster"></div>'
+        +'<label>Or type a code this phone started</label><input id="hostcode" maxlength="8" placeholder="UDN3YN" style="text-transform:uppercase"/>'
+        +'<button class="ghost" id="openh" type="button">Open that admin</button>'
+        +'<p class="sub" id="hosterr"></p></div>';
+    }
+    app.innerHTML=roster
+      +'<h1>Start a hunt</h1><p class="sub">Pick the kind of hunt. Edit the finds. Then start. You can add more finds after it is live.</p>'
+      +'<img id="envpic" alt=""/>'
+      +'<div class="card"><label>Your name</label><input id="nm" maxlength="24" placeholder="Game master" value="'+(s.name||"")+'"/>'
+      +'<label>What kind of hunt?</label><div class="row" id="envs"></div>'
+      +'<p class="sub" id="blurb"></p>'
+      +'<p class="sub">Edit these. One find per line. Change the point value if a find is worth more.</p>'
+      +'<div id="finds"></div>'
+      +'<button class="ghost" id="more" type="button">Add five more finds</button>'
+      +'<label>Optional cash each person puts in the real pot (display only)</label><input id="pot" type="number" min="0" max="100" value="'+(s.pot||0)+'"/>'
+      +'<button class="gold" id="go" type="button">Start hunt</button></div>'
+      +'<p class="sub"><a href="/">Back</a></p>';
+    function paintFinds(){
+      $("finds").innerHTML=rows.map(function(t,i){
+        return '<div class="item"><b>Find '+(i+1)+'</b><input data-t="'+i+'" value="'+esc(t)+'"/><input data-p="'+i+'" type="number" min="1" max="20" value="1"/></div>';
+      }).join("");
+    }
+    function fill(id, keep){
+      env=id; s.pick=id; save(s);
+      var e=ENVS[id];
+      $("blurb").textContent=e.blurb;
+      $("envpic").src="/banners/"+id+".jpg";
+      if(!keep){ rows=e.items.slice(); paintFinds(); }
+      [].slice.call($("envs").children).forEach(function(el){ el.className = el.getAttribute("data-e")===id ? "chip on" : "chip"; });
+    }
+    ORDER.forEach(function(id){
+      var b=document.createElement("button");
+      b.type="button"; b.className="chip"; b.textContent=ENVS[id].name; b.setAttribute("data-e",id);
+      b.onclick=function(){ fill(id, false); };
+      $("envs").appendChild(b);
+    });
+    paintFinds();
+    fill(env, true);
+    if($("roster")){
+      codes.forEach(function(c){
+        var b=document.createElement("button");
+        b.type="button"; b.className="chip"; b.textContent=c;
+        b.onclick=function(){ switchHunt(c); };
+        $("roster").appendChild(b);
+      });
+    }
+    if($("openh")){
+      $("openh").onclick=function(){ switchHunt(($("hostcode").value||"").replace(/[^a-zA-Z0-9]/g,"").toUpperCase()); };
+    }
+    $("more").onclick=function(){
+      readDraft();
+      rows=rows.concat(["","","","",""]);
+      paintFinds();
+    };
+    function readDraft(){
+      rows=[].slice.call(app.querySelectorAll("[data-t]")).map(function(el){return el.value.trim();});
+      s.draft=rows; s.name=$("nm").value; s.pot=Number($("pot").value||0); save(s);
+      return rows.filter(function(t){return t.length>=2;});
+    }
+    $("go").onclick=async function(){
+      var titles=readDraft();
+      if(!titles.length){ $("go").textContent="Add at least one find"; return; }
+      $("go").textContent="Starting…";
+      try{
+        var out=await post({a:"create",n:$("nm").value||"Host",e:env,i:titles,p:Number($("pot").value||0)});
+        if(!out.ok) throw new Error(out.error||"Could not start.");
+        save({code:out.code,hostToken:out.hostToken,watchToken:out.watchToken||"",items:out.items,env:out.environment,pot:out.pot,name:$("nm").value||"Host",tab:"hunt"});
+        render();
+      }catch(err){ $("go").textContent=err.message||"Could not start."; }
+    };
+  }
+
+  function admin(data){
+    var s=viewOnly?{code:watchCode,tab:viewTab,env:(data.hunt&&data.hunt.environment)||"police"}:load();
+    var hunt=data.hunt||{};
+    var items=data.items||[];
+    var players=data.players||[];
+    var subs=data.submissions||[];
+    if(!viewOnly){ s.items=items.map(function(x){return x.title;}); s.env=hunt.environment||s.env; save(s); }
+    var tab=viewOnly?viewTab:(s.tab||"hunt");
+    var envName=(ENVS[s.env]&&ENVS[s.env].name)||s.env;
+    var app=$("app");
+    app.innerHTML='<p class="sub">'+(viewOnly?"View only · ":"Game master · ")+esc(envName)+(hunt.status==="closed"?" · Hunt closed":"")+'</p>'
+      +'<h1 class="code">'+esc(s.code)+'</h1>'
+      +(viewOnly?'<p class="sub">You can look. You cannot grade, edit, or spin.</p>':'')
+      +(s.env==="police"?'<p class="sub">Police hunt. Players type their beat. Each still is In beat or Not in beat.</p>':'')
+      +'<div class="tabs">'
+      +'<button type="button" data-tab="hunt" class="'+(tab==="hunt"?"on":"")+'">Hunt</button>'
+      +'<button type="button" data-tab="scores" class="'+(tab==="scores"?"on":"")+'">Scores</button>'
+      +'<button type="button" data-tab="pot" class="'+(tab==="pot"?"on":"")+'">Pot</button>'
+      +'</div><div id="pane"></div>';
+    app.querySelectorAll("[data-tab]").forEach(function(b){
+      b.onclick=function(){
+        if(viewOnly) viewTab=b.getAttribute("data-tab");
+        else { s.tab=b.getAttribute("data-tab"); save(s); }
+        admin(boardCache||data);
+      };
+    });
+    var pane=$("pane");
+    if(tab==="hunt") paneHunt(pane, s, hunt, items, players);
+    else if(tab==="pot") panePot(pane, s, hunt, players);
+    else paneScores(pane, s, hunt, items, players, subs);
+  }
+
+  function paneHunt(pane, s, hunt, items, players){
+    var roster=(players&&players.length)
+      ? players.map(function(p){ return esc(p.callsign)+(p.gift_card_pick?" · "+esc(p.gift_card_pick):"")+(p.beat?" · Beat "+esc(p.beat):"")+" · "+(p.points||0)+" pts"; }).join("<br/>")
+      : "No players yet.";
+    if(viewOnly){
+      pane.innerHTML='<div class="card"><p class="sub">Players</p><p>'+roster+'</p></div>'
+        +'<div class="card"><p class="sub">Finds on this hunt. View only.</p>'
+        +(items.map(function(it,i){return '<p><b>Find '+(i+1)+'</b> — '+esc(it.title)+' · '+(it.points||1)+' pt</p>';}).join("")||'<p class="sub">No finds.</p>')
+        +'</div>';
+      return;
+    }
+    pane.innerHTML='<div class="card"><p class="sub">Players</p><p>'+roster+'</p></div>'
+      +'<div class="card"><p class="sub">Text this player link. They do not need an account.</p>'
+      +'<p class="sub" style="word-break:break-all">'+invite(s, items)+'</p>'
+      +'<button class="gold" id="share" type="button">Invite player</button>'
+      +'<button class="ghost" id="copy" type="button">Copy player invite</button></div>'
+      +'<div class="card"><p class="sub">Spectator sees this hunt only. They can look at players and stills. They cannot grade, edit, or spin.</p>'
+      +'<p class="sub" id="speclink" style="word-break:break-all">'+(s.watchToken?(location.origin+"/host.html?c="+encodeURIComponent(s.code)+"&w="+encodeURIComponent(s.watchToken)):"Tap below to make a spectator link for this hunt.")+'</p>'
+      +'<button class="gold" id="spec" type="button">Invite spectator</button>'
+      +'<button class="ghost" id="specopy" type="button">Copy spectator link</button>'
+      +'<button class="ghost" id="specnew" type="button">New spectator link</button></div>'
+      +'<div class="card"><p class="sub">Your list. Edit any line. Points are how much that find is worth.</p>'
+      +'<div id="list"></div>'
+      +'<button class="gold" id="save" type="button">Save list</button>'
+      +'<p class="sub" id="saved"></p>'
+      +'<label>Add five more finds</label>'
+      +'<div id="extra"></div>'
+      +'<button class="ghost" id="add" type="button">Add these to the hunt</button></div>'
+      +'<button class="ghost" id="check" type="button">Check for stills</button>'
+      +'<button class="ghost" id="close" type="button">'+(hunt.status==="closed"?"Open hunt back up":"End hunt")+'</button>'
+      +'<button class="ghost" id="fresh" type="button">Start a different hunt</button>';
+    $("list").innerHTML=items.map(function(it,i){
+      return '<div class="item"><b>Find '+(i+1)+'</b><input data-id="'+esc(it.id)+'" value="'+esc(it.title)+'"/><input data-pts="'+esc(it.id)+'" type="number" min="1" max="20" value="'+(it.points||1)+'"/></div>';
+    }).join("") || '<p class="sub">No finds yet.</p>';
+    $("extra").innerHTML=[0,1,2,3,4].map(function(i){
+      return '<input data-new="'+i+'" placeholder="Find '+(items.length+i+1)+'"/>';
+    }).join("");
+    $("share").onclick=function(){
+      var msg=text(s, items);
+      if(navigator.share) navigator.share({text:msg}).catch(function(){ navigator.clipboard.writeText(msg); });
+      else navigator.clipboard.writeText(msg);
+    };
+    $("copy").onclick=function(){ navigator.clipboard.writeText(text(s, items)); $("copy").textContent="Copied"; };
+    function specUrl(token){
+      return location.origin+"/host.html?c="+encodeURIComponent(s.code)+"&w="+encodeURIComponent(token);
+    }
+    function specMsg(token){
+      return "Scavenger Master — view only for hunt "+s.code+". You can look, not grade.\n"+specUrl(token);
+    }
+    async function mintWatch(){
+      var out=await post({a:"watch",c:s.code,t:s.hostToken});
+      if(!out.ok) throw new Error(out.error||"Could not make spectator link.");
+      s.watchToken=out.token;
+      save(s);
+      $("speclink").textContent=specUrl(s.watchToken);
+      return s.watchToken;
+    }
+    $("spec").onclick=async function(){
+      try{
+        var token=s.watchToken||await mintWatch();
+        var msg=specMsg(token);
+        if(navigator.share){ try{ await navigator.share({text:msg, url:specUrl(token)}); }catch(e){} }
+        else if(navigator.clipboard){ navigator.clipboard.writeText(msg); $("spec").textContent="Spectator link copied"; }
+      }catch(e){ $("spec").textContent=e.message||"Could not make spectator link."; }
+    };
+    $("specopy").onclick=async function(){
+      try{
+        var token=s.watchToken||await mintWatch();
+        navigator.clipboard.writeText(specMsg(token));
+        $("specopy").textContent="Copied";
+      }catch(e){ $("specopy").textContent=e.message||"Copy failed"; }
+    };
+    $("specnew").onclick=async function(){
+      try{
+        await mintWatch();
+        $("specnew").textContent="New link ready — old one no longer works";
+      }catch(e){ $("specnew").textContent=e.message||"Could not replace."; }
+    };
+    $("save").onclick=async function(){
+      var rows=[].slice.call($("list").querySelectorAll("[data-id]")).map(function(el){
+        var id=el.getAttribute("data-id");
+        var pts=pane.querySelector('[data-pts="'+id+'"]');
+        return {id:id, title:el.value, points:pts?pts.value:1};
+      });
+      $("save").textContent="Saving…";
+      try{
+        var out=await post({a:"saveitems",c:s.code,t:s.hostToken,items:rows});
+        boardCache=out; $("save").textContent="Saved"; admin(out);
+      }catch(e){ $("save").textContent=e.message||"Save failed"; }
+    };
+    $("add").onclick=async function(){
+      var titles=[].slice.call(pane.querySelectorAll("[data-new]")).map(function(el){return el.value.trim();}).filter(function(t){return t.length>=2;});
+      if(!titles.length){ $("add").textContent="Type the new finds first"; return; }
+      $("add").textContent="Adding…";
+      try{
+        var out=await post({a:"additems",c:s.code,t:s.hostToken,i:titles});
+        boardCache=out; admin(out);
+      }catch(e){ $("add").textContent=e.message||"Add failed"; }
+    };
+    $("check").onclick=function(){ refresh(true); };
+    $("close").onclick=async function(){
+      var out=await post({a:"close",c:s.code,t:s.hostToken});
+      boardCache=out; admin(out);
+    };
+    $("fresh").onclick=function(){
+      save({});
+      location.href="/host.html?new=1";
+    };
+  }
+
+  function paneScores(pane, s, hunt, items, players, subs){
+    if(!players.length){
+      pane.innerHTML='<div class="card"><p class="sub">No players yet. Invite someone from Hunt. The list of finds is already live.</p></div>'
+        +listPreview(items);
+      return;
+    }
+    var html='<div class="card"><p class="sub">Swipe a row to see every still. Tap a photo to grade it. Name stays on the left.</p></div>';
+    players.forEach(function(p){
+      html+='<div class="card player"><div class="who"><b>'+esc(p.callsign)+'</b> · '+p.points+' pts · '+p.counted+' counted'
+        +(p.gift_card_pick?' · '+esc(p.gift_card_pick):'')
+        +(p.beat?' · Beat '+esc(p.beat):'')
+        +(hunt.declaredWinnerId===p.id?' · Winner':'')
+        +'</div><div class="film">';
+      items.forEach(function(it, idx){
+        var sub=subs.find(function(x){return x.player_id===p.id && x.item_id===it.id});
+        var st=sub?sub.status:"empty";
+        var cls=st==="counted"?"ok":st==="rejected"?"no":st==="empty"?"empty":"wait";
+        html+='<button type="button" class="thumb '+cls+'" data-open="1" data-sid="'+(sub?esc(sub.id):"")+'" data-st="'+esc(st)+'" data-title="'+esc(it.title)+'" data-n="'+(idx+1)+'" data-pts="'+(it.points||1)+'" data-who="'+esc(p.callsign)+'" data-note="'+(sub?esc(sub.note):"")+'">';
+        html+='<span class="n">'+(idx+1)+'</span>';
+        if(sub) html+='<img alt="" src="/api/still?sid='+encodeURIComponent(sub.id)+'"/>';
+        else html+='—';
+        html+='</button>';
+      });
+      html+='</div>'+(viewOnly?'':'<button class="ghost" data-win="'+esc(p.id)+'" type="button">Reveal this winner</button>')+'</div>';
+    });
+    pane.innerHTML=html;
+    pane.querySelectorAll("[data-open]").forEach(function(btn){
+      btn.onclick=function(){
+        openStill(btn.getAttribute("data-sid"), btn.querySelector("img")?btn.querySelector("img").src:"", btn.getAttribute("data-st"), {
+          title:btn.getAttribute("data-title"),
+          n:btn.getAttribute("data-n"),
+          pts:btn.getAttribute("data-pts"),
+          who:btn.getAttribute("data-who"),
+          note:btn.getAttribute("data-note")
+        });
+      };
+    });
+    pane.querySelectorAll("[data-win]").forEach(function(b){
+      b.onclick=async function(){
+        var out=await post({a:"winner",c:s.code,t:s.hostToken,pid:b.getAttribute("data-win")});
+        boardCache=out; s.tab="pot"; save(s); admin(out);
+      };
+    });
+  }
+
+  function listPreview(items){
+    return '<div class="card">'+(items.map(function(it,i){return '<p><b>Find '+(i+1)+'</b> — '+esc(it.title)+'</p>';}).join("")||'<p class="sub">No finds.</p>')+'</div>';
+  }
+
+  function openStill(sid, src, status, meta){
+    meta=meta||{};
+    var ov=$("ov");
+    ov.className="on";
+    var label=status==="counted"?"Counted":status==="rejected"?"Rejected":status==="empty"?"No still yet":"Waiting";
+    ov.innerHTML='<p class="who">'+esc(meta.who||"")+'</p>'
+      +'<h2>Find '+(meta.n||"")+' · '+(meta.pts||1)+' pt</h2>'
+      +'<p>'+esc(meta.title||"")+'</p>'
+      +'<p class="sub">'+label+(meta.note?" · "+esc(meta.note):"")+'</p>'
+      +(src?'<img alt="" src="'+src+'"/>':'<p class="sub">No photo on this find yet.</p>')
+      +(sid && !viewOnly?'<button class="gold" id="cnt" type="button">Count it</button><button class="ghost" id="rej" type="button">Reject</button>':'')
+      +'<button class="ghost" id="x" type="button">Close</button>';
+    function grade(st){
+      var s=load();
+      post({a:"grade",c:s.code,t:s.hostToken,sid:sid,s:st}).then(function(out){
+        boardCache=out; ov.className=""; admin(out);
+      });
+    }
+    if($("cnt")) $("cnt").onclick=function(){ grade("counted"); };
+    if($("rej")) $("rej").onclick=function(){ grade("rejected"); };
+    $("x").onclick=function(){ ov.className=""; };
+  }
+
+  function panePot(pane, s, hunt, players){
+    var winner=players.find(function(p){return p.id===hunt.declaredWinnerId;});
+    var cards=[];
+    players.forEach(function(p){ if(p.gift_card_pick) cards.push(p.gift_card_pick); });
+    (hunt.giftCards||[]).forEach(function(c){ cards.push(c); });
+    if(!cards.length){
+      var html='<div class="card">';
+      if(winner) html+='<h1>Scavenger Master winner</h1><p class="code">'+esc(winner.callsign)+'</p>';
+      else html+='<p class="sub">Pick the winner on Scores first. The name stays hidden until then.</p>';
+      var pot=Number(hunt.potPerPlayer||s.pot||0)*Math.max(1, players.length);
+      if(hunt.potRemaining) pot=hunt.potRemaining;
+      html+='<p class="sub">Pot display $'+pot+'. Cash stays in the real pot. Nothing is charged here.</p></div>';
+      html+=(viewOnly?'':'<div class="card"><label>Add another gift card to the wheel</label><input id="card" maxlength="40" placeholder="Local shop"/><button class="ghost" id="addc" type="button">Add to wheel</button></div>');
+      pane.innerHTML=html;
+      if($("addc")) $("addc").onclick=async function(){
+        var name=($("card").value||"").trim();
+        if(name.length<2) return;
+        var out=await post({a:"addcard",c:s.code,t:s.hostToken,card:name});
+        boardCache=out; admin(out);
+      };
+      return;
+    }
+    var pot=Number(hunt.potPerPlayer||s.pot||0)*Math.max(1, players.length);
+    if(hunt.potRemaining) pot=hunt.potRemaining;
+    var html='<div class="card">';
+    if(winner) html+='<h1>Scavenger Master winner</h1><p class="code">'+esc(winner.callsign)+'</p>';
+    else html+='<p class="sub">Pick the winner on Scores first. The name stays hidden until then.</p>';
+    html+='<p class="sub">Pot display $'+pot+'. Cash stays in the real pot. Nothing is charged here.</p></div>';
+    html+='<div class="wheelwrap"><div class="peg"></div><div class="wheel" id="wheel">'+wheelSvg(cards)+'</div></div>';
+    html+='<p class="sub" id="land" style="text-align:center">The gold pointer is the marker.</p>';
+    if(!viewOnly){
+      html+='<button class="gold" id="spin" type="button">Spin</button>';
+      html+='<button class="ghost" id="accept" type="button">Accept this gift card</button>';
+      html+='<button class="ghost" id="deduct" type="button">No — deduct $10 and re-spin</button>';
+      html+='<div class="card"><label>Add another gift card to the wheel</label><input id="card" maxlength="40" placeholder="Local shop"/>'
+        +'<button class="ghost" id="addc" type="button">Add to wheel</button></div>';
+    }
+    pane.innerHTML=html;
+    var last="";
+    if($("spin")) $("spin").onclick=function(){
+      spinR += 1080 + Math.floor(Math.random()*360);
+      $("wheel").style.transform="rotate("+spinR+"deg)";
+      var slice=360/cards.length;
+      setTimeout(function(){
+        var deg=((360-(spinR%360))%360);
+        var idx=Math.floor(deg/slice)%cards.length;
+        last=cards[idx];
+        $("land").textContent="Pointer is on "+last;
+      }, 3300);
+    };
+    if($("accept")) $("accept").onclick=function(){ $("land").textContent=last?("Winner takes "+last):"Spin first."; };
+    if($("deduct")) $("deduct").onclick=async function(){
+      try{ await post({a:"deduct",c:s.code,t:s.hostToken,remain:Math.max(0,pot-10)}); }catch(e){}
+      $("spin").click();
+    };
+    if($("addc")) $("addc").onclick=async function(){
+      var name=($("card").value||"").trim();
+      if(name.length<2) return;
+      var out=await post({a:"addcard",c:s.code,t:s.hostToken,card:name});
+      boardCache=out; admin(out);
+    };
+  }
+
+  function wheelSvg(cards){
+    var n=cards.length, slice=360/n, colors=["#c9a227","#7a5a12","#d8c48a","#8b6914","#b8942b","#5c4310","#e2d3a0","#a07d12"];
+    var parts=[];
+    for(var i=0;i<n;i++){
+      var a1=(i*slice-90)*Math.PI/180, a2=((i+1)*slice-90)*Math.PI/180;
+      var x1=140+140*Math.cos(a1), y1=140+140*Math.sin(a1);
+      var x2=140+140*Math.cos(a2), y2=140+140*Math.sin(a2);
+      var large=slice>180?1:0;
+      parts.push('<path d="M140,140 L'+x1+','+y1+' A140,140 0 '+large+' 1 '+x2+','+y2+' Z" fill="'+colors[i%colors.length]+'"/>');
+      var mid=((i+0.5)*slice-90)*Math.PI/180;
+      var tx=140+88*Math.cos(mid), ty=140+88*Math.sin(mid);
+      parts.push('<text x="'+tx+'" y="'+ty+'" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="#1c160c">'+esc(cards[i]).slice(0,14)+'</text>');
+    }
+    return '<svg class="wheel" viewBox="0 0 280 280" width="280" height="280">'+parts.join("")+'</svg>';
+  }
+
+  async function refresh(force){
+    try{
+      var path;
+      if(viewOnly){
+        path="?c="+encodeURIComponent(watchCode)+"&w="+encodeURIComponent(watchKey);
+      } else {
+        var s=load();
+        if(!s.code || !s.hostToken) return;
+        path="?c="+encodeURIComponent(s.code)+"&t="+encodeURIComponent(s.hostToken);
+      }
+      var out=await Promise.race([
+        api(path),
+        new Promise(function(_,rej){ setTimeout(function(){ rej(new Error("Timed out.")); }, 12000); })
+      ]);
+      if(!out.ok) throw new Error(out.error||"Could not load.");
+      boardCache=out;
+      admin(out);
+    }catch(err){
+      $("app").innerHTML='<div class="card"><p class="bad">'+(err.message||"Could not load board.")+'</p>'
+        +'<button class="gold" id="retry" type="button">Retry</button>'
+        +(viewOnly?'':'<button class="ghost" id="wipe2" type="button">Start a new hunt</button>')+'</div>';
+      $("retry").onclick=function(){ refresh(true); };
+      if($("wipe2")) $("wipe2").onclick=function(){ save({}); render(); };
+    }
+  }
+
+  function render(){
+    try{
+      var q=new URLSearchParams(location.search);
+      if(q.get("w") && q.get("c")){
+        viewOnly=true;
+        watchCode=String(q.get("c")||"").replace(/[^a-zA-Z0-9]/g,"").toUpperCase();
+        watchKey=q.get("w");
+        $("app").innerHTML='<p class="sub">Opening view-only board…</p>';
+        refresh(true);
+        if(!render.timer) render.timer=setInterval(function(){ refresh(false); }, 5000);
+        return;
+      }
+      if(/[?&]new=1/.test(location.search)){
+        localStorage.removeItem(K);
+        if(history.replaceState) history.replaceState({}, "", "/host.html");
+      }
+    }catch(e){}
+    var s=load();
+    if(!s.code || !s.hostToken){ startScreen(); return; }
+    $("app").innerHTML='<p class="sub">Loading '+s.code+'…</p>';
+    refresh(true);
+    if(!render.timer) render.timer=setInterval(function(){ refresh(false); }, 5000);
+  }
+  render();
+} catch (err) {
+  var box=document.getElementById("app");
+  if(box) box.innerHTML='<h1>Start a hunt</h1><p class="sub">This page hit a snag. You can start a new one.</p><button class="gold" id="wipe" type="button">Start a new hunt</button><p class="sub">'+(err&&err.message?err.message:"")+'</p>';
+  var wipe=document.getElementById("wipe");
+  if(wipe) wipe.onclick=function(){ try{ localStorage.removeItem("sm.host.fyi"); }catch(e){} location.reload(); };
+}
+})();
+</script>
+</body>
+</html>
