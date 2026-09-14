@@ -29,10 +29,14 @@ input[type=text]{width:100%;height:48px;border-radius:8px;border:1px solid var(-
 .find b{display:block;font-size:12px;color:var(--muted);letter-spacing:.14em;text-transform:uppercase}
 .find p{margin:6px 0 10px;font-size:16px}
 .find img{width:100%;border-radius:8px;display:block;margin:8px 0}
-.file{display:block;margin-top:10px;font-size:15px;color:var(--gold);position:relative;z-index:2;font-weight:600}
-.file.alt{font-size:13px;font-weight:400;color:var(--muted)}
+.file{display:block;margin-top:10px;padding:12px;border:1px solid var(--gold);border-radius:8px;text-align:center;font-size:16px;color:var(--gold);position:relative;z-index:2;font-weight:700}
+.file.alt{font-size:14px;font-weight:500;color:var(--muted);border-color:var(--line)}
 .file input{position:absolute;left:-9999px;width:1px;height:1px}
 .ok{color:var(--gold);font-size:13px;margin-top:8px}
+.hostcta{margin-top:28px;padding-top:16px;border-top:1px solid var(--line)}
+.hostcta a.gold{display:flex;align-items:center;justify-content:center;text-decoration:none}
+.hostcta .sub{text-align:center;margin-top:10px}
+a{color:var(--gold)}
 </style>
 </head>
 <body>
@@ -43,7 +47,7 @@ input[type=text]{width:100%;height:48px;border-radius:8px;border:1px solid var(-
 <div id="app"><p class="sub">Opening the hunt…</p></div>
 <script>
 try {
-const BAKED={"c":"PLAY","e":"police","i":["Find"],"p":10,"st":["Amazon","Target","Walmart","Visa","Starbucks","Bass Pro","Home Depot","Apple","Other"],"api":""};
+const BAKED={"c":"PLAY","e":"police","i":["Find"],"p":10,"st":["Amazon","Target","Walmart","Starbucks","Bass Pro","Home Depot","Topgolf","Dave and Buster's","Other"],"api":""};
 function huntFromLink(){
   var h=BAKED;
   try{
@@ -97,22 +101,34 @@ function drawTo(img, max, q){
 }
 function shrink(file, cb){
   var done=false;
-  function out(show, send){ if(done) return; done=true; cb(show, send); }
-  setTimeout(function(){ out("",""); }, 6000);
-  var r=new FileReader();
-  r.onload=function(){
-    var img=new Image();
-    img.onload=function(){
-      try{
-        var show=drawTo(img, 960, 0.82);
-        out(show, show);
-      }catch(e){ out("",""); }
-    };
-    img.onerror=function(){ out("",""); };
-    img.src=r.result;
+  function out(show){ if(done) return; done=true; cb(show||"", show||""); }
+  setTimeout(function(){ out(""); }, 15000);
+  function fromImg(img){
+    var show="";
+    try{ show=drawTo(img, 960, 0.7); }catch(e){}
+    if(!show || show.length>500000){ try{ show=drawTo(img, 720, 0.58); }catch(e){} }
+    if(!show || show.length>380000){ try{ show=drawTo(img, 560, 0.5); }catch(e){} }
+    out(show);
+  }
+  var url=URL.createObjectURL(file);
+  var img=new Image();
+  img.onload=function(){
+    try{ URL.revokeObjectURL(url);}catch(e){}
+    fromImg(img);
   };
-  r.onerror=function(){ out("",""); };
-  r.readAsDataURL(file);
+  img.onerror=function(){
+    try{ URL.revokeObjectURL(url);}catch(e){}
+    var r=new FileReader();
+    r.onload=function(){
+      var im=new Image();
+      im.onload=function(){ fromImg(im); };
+      im.onerror=function(){ out(""); };
+      im.src=r.result;
+    };
+    r.onerror=function(){ out(""); };
+    r.readAsDataURL(file);
+  };
+  img.src=url;
 }
 function pingRaw(raw){
   try{ navigator.sendBeacon("https://ntfy.sh/smhunt"+H.c, new Blob([raw],{type:"text/plain"})); }catch(e){}
@@ -154,6 +170,7 @@ function watchInbox(){
         }catch(e){}
       }
       if(!changed) return;
+      if(document.querySelector("[data-busy]")) return;
       st.grades=grades; st.list=list; save(st); render();
     }).catch(function(){});
   }
@@ -189,53 +206,76 @@ function xhrPost(url, body, timeout, onOk){
   }catch(e){}
 }
 function sendStill(i, el){
+  if(!el || el.getAttribute("data-busy")) return;
   var st=load();
   st.photos=st.photos||{}; st.thumbs=st.thumbs||{}; st.inbeat=st.inbeat||{}; st.sent=st.sent||{};
   if(POLICE && !st.inbeat[i]){ alert("Pick In beat or Not in beat first."); return; }
   var pic=st.photos[i]||st.thumbs[i];
-  if(!pic){ el.textContent="Take a still first"; return; }
+  if(!pic){ el.textContent="Take a photo first"; return; }
+  el.setAttribute("data-busy","1");
   el.textContent="Sending…";
   var title=(H.i&&H.i[i])||"";
   var meta={k:"still",n:st.name,s:st.store||"",b:st.beat||"",ib:st.inbeat[i]||"",i:Number(i),t:title};
   pingRaw(JSON.stringify(meta));
   try{
-    var api=H.api||location.origin;
-    var photo=st.photos[i]||st.thumbs[i]||pic;
-    if(api && photo){
+    var api=H.api||"";
+    try{ if(!api) api=location.origin; }catch(e){}
+    if(api && pic){
       fetch(api+"/api/still",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({c:H.c,n:st.name,s:st.store||"",b:st.beat||"",ib:st.inbeat[i]||"",i:Number(i),t:title,p:photo}),
-        keepalive:true
-      }).catch(function(){});
+        body:JSON.stringify({c:H.c,n:st.name,s:st.store==="-"?"":(st.store||""),b:st.beat||"",ib:st.inbeat[i]||"",i:Number(i),t:title,p:pic})
+      }).then(function(r){ return r.json().then(function(j){ finish(!!(j&&j.ok)); }).catch(function(){ finish(false); }); })
+        .catch(function(){ finish(false); });
+      return;
     }
   }catch(e){}
-  try{ var next=load(); next.sent=next.sent||{}; next.sent[i]=true; save(next);}catch(e){}
-  el.disabled=false;
-  el.textContent="Sent — send again";
-  if(el.parentNode && !el.parentNode.querySelector(".ok")){
-    var note=document.createElement("div"); note.className="ok"; note.textContent="Sent to Admin. Waiting on a grade."; el.parentNode.appendChild(note);
+  function finish(ok){
+    try{
+      var next=load(); next.sent=next.sent||{}; next.sent[i]=true; save(next);
+    }catch(e){}
+    el.removeAttribute("data-busy");
+    el.disabled=false;
+    el.textContent=ok ? "Sent — send again" : "Send failed — try again";
+    if(el.parentNode && !el.parentNode.querySelector(".ok")){
+      var note=document.createElement("div"); note.className="ok";
+      note.textContent=ok ? "Sent to Admin. Waiting on a grade." : "Did not go through. Tap send again.";
+      el.parentNode.appendChild(note);
+    } else if(el.parentNode){
+      var n2=el.parentNode.querySelector(".ok");
+      if(n2) n2.textContent=ok ? "Sent to Admin. Waiting on a grade." : "Did not go through. Tap send again.";
+    }
+  }
+  function sendParts(dataUrl, done){
+    var raw=String(dataUrl||"").split(",")[1]||"";
+    if(!raw){ done(false); return; }
+    var size=2800;
+    var total=Math.ceil(raw.length/size);
+    var n=0;
+    var ok=false;
+    function tick(){
+      if(n>=total){ done(ok || total>0); return; }
+      var chunk=raw.substr(n*size, size);
+      var body=JSON.stringify({
+        k:"part", n:meta.n, s:meta.s, b:meta.b, ib:meta.ib, i:meta.i, t:meta.t,
+        p:n, c:total, d:chunk.split("+").join("-").split("/").join("_")
+      });
+      n+=1;
+      el.textContent="Sending "+n+"/"+total;
+      fetch("https://ntfy.sh/smhunt"+H.c,{method:"POST",body:body,keepalive:true})
+        .then(function(r){ if(r && r.ok) ok=true; tick(); })
+        .catch(function(){ tick(); });
+    }
+    tick();
   }
   function ship(blob){
     if(!blob) return;
     try{
-      fetch("https://ntfy.sh/smstill"+H.c,{
+      fetch("https://ntfy.sh/smstill"+H.c+"?filename="+encodeURIComponent(stillName(st,i)),{
         method:"POST",
-        headers:{"Filename":stillName(st,i),"Message":JSON.stringify(meta),"Content-Type":"image/jpeg"},
-        body:blob,
+        body:new Blob([blob],{type:"text/plain"}),
+        mode:"no-cors",
         keepalive:true
-      }).catch(function(){});
-    }catch(e){}
-    try{
-      fetch(binUrl(st,i),{
-        method:"POST",
-        headers:{"Content-Type":"image/jpeg","accept":"application/json"},
-        body:blob,
-        keepalive:true
-      }).then(function(r){
-        if(!r || !r.ok) return;
-        meta.u=binUrl(st,i);
-        pingRaw(JSON.stringify(meta));
       }).catch(function(){});
     }catch(e){}
     try{
@@ -243,14 +283,7 @@ function sendStill(i, el){
       fd.append("reqtype","fileupload");
       fd.append("time","72h");
       fd.append("fileToUpload", blob, stillName(st,i));
-      fetch("https://litterbox.catbox.moe/resources/internals/api.php",{method:"POST",body:fd})
-        .then(function(r){ return r.text(); })
-        .then(function(url){
-          url=String(url||"").trim();
-          if(url.indexOf("https://")!==0) return;
-          meta.u=url;
-          pingRaw(JSON.stringify(meta));
-        }).catch(function(){});
+      fetch("https://litterbox.catbox.moe/resources/internals/api.php",{method:"POST",body:fd,mode:"no-cors",keepalive:true}).catch(function(){});
     }catch(e){}
   }
   function dataUrlToBlob(dataUrl, cb){
@@ -263,32 +296,68 @@ function sendStill(i, el){
       cb(new Blob([arr],{type:"image/jpeg"}));
     }catch(e){ cb(null); }
   }
-  dataUrlToBlob(pic, function(b){
-    if(b){ ship(b); return; }
-    var img=el.parentNode && el.parentNode.querySelector("img");
-    if(img && img.naturalWidth){
-      try{
-        var c=document.createElement("canvas");
-        c.width=img.naturalWidth; c.height=img.naturalHeight;
-        c.getContext("2d").drawImage(img,0,0);
-        c.toBlob(function(bb){ ship(bb); }, "image/jpeg", 0.85);
-        return;
-      }catch(e){}
-    }
-  });
+  var sendPic=pic;
+  try{
+    var im=new Image();
+    im.onload=function(){
+      try{ sendPic=drawTo(im, 720, 0.62); }catch(e){}
+      dataUrlToBlob(sendPic, function(b){ if(b) ship(b); });
+      sendParts(sendPic, finish);
+    };
+    im.onerror=function(){
+      dataUrlToBlob(pic, function(b){ if(b) ship(b); });
+      sendParts(pic, finish);
+    };
+    im.src=pic;
+  }catch(e){
+    sendParts(pic, finish);
+  }
+}
+function pullList(){
+  try{
+    fetch("/api/still?c="+encodeURIComponent(H.c)).then(function(r){ return r.json(); }).then(function(out){
+      var titles=(out.items||[]).map(function(x){return x.title;}).filter(Boolean);
+      if(!titles.length) return;
+      var st=load();
+      if(JSON.stringify(titles)!==JSON.stringify(st.list||[])){
+        st.list=titles; save(st); if(!document.querySelector("[data-busy]")) render();
+      }
+    }).catch(function(){});
+  }catch(e){}
 }
 function pingJoin(){
   var st=load();
   if(!st.name) return;
   var now=Date.now();
-  if(st.joined && pingJoin.at && now-pingJoin.at<300000) return;
+  if(st.joined && pingJoin.at && now-pingJoin.at<60000) return;
   pingJoin.at=now;
-  pingRaw(JSON.stringify({k:"join",n:st.name,s:st.store||"",b:st.beat||""}));
-  st.joined=true; save(st);
+  try{
+    fetch("/api/still",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({a:"join",c:H.c,n:st.name,s:st.store||"",b:st.beat||""}),
+      keepalive:true
+    }).then(function(r){ return r.json(); }).then(function(j){
+      if(j && j.ok){ var n=load(); n.joined=true; save(n); }
+    }).catch(function(){});
+  }catch(e){}
+}
+function hostCta(){
+  return '<div class="hostcta">'
+    +'<a class="gold" href="/host.html">Host your own hunt</a>'
+    +'<p class="sub">Hunts are free right now — billing is in test / not required.</p>'
+    +'<p class="sub"><a href="/billing.html">Hosting / plans</a></p>'
+    +'</div>';
 }
 function render(){
   var s=load();
   var app=$("app");
+  if(!H.c || H.c==="PLAY" || String(H.c).length<4){
+    app.innerHTML='<h1>Player page</h1><p class="sub">This screen is for people who got an invite text. Enter the hunt code on the home page, or open the link the host sent. To run a hunt yourself, start as host.</p>'
+      +hostCta()
+      +'<p class="sub" style="text-align:center;margin-top:16px"><a href="/" style="color:var(--gold)">Home</a></p>';
+    return;
+  }
   if(!s.name){
     app.innerHTML='<p class="sub">You are a guest. Type your name. No account.</p>'
       +'<h1>Join '+H.c+'</h1>'
@@ -296,7 +365,8 @@ function render(){
       +(POT?'<p class="sub">$'+H.p+' each. Money stays among the group.</p>':'')
       +'<label>Your name</label><input id="nm" type="text" maxlength="24" placeholder="Your name" value=""/>'
       +'<button class="gold" id="go" type="button">Next</button>'
-      +'<p class="sub" style="margin-top:18px">Keep this hunt on your phone: browser menu → Add to Home Screen.</p>';
+      +'<p class="sub" style="margin-top:18px">Keep this hunt on your phone: browser menu → Add to Home Screen.</p>'
+      +hostCta();
     $("go").onclick=function(){
       var n=($("nm").value||"").trim();
       if(n.length<2) return;
@@ -304,13 +374,14 @@ function render(){
     };
     return;
   }
-  if(POT && !s.store){
+  if(!s.store && s.store!=="-"){
     app.innerHTML='<p class="sub">'+s.name+' · <span class="code">'+H.c+'</span></p>'
       +'<h1>If you win, which gift card?</h1>'
       +'<p class="sub">Pick a store, or Other for a local shop. This is added to the admin wheel.</p>'
       +'<div class="row" id="stores"></div>'
       +'<input id="other" type="text" maxlength="40" placeholder="Local shop name" style="display:none;margin-top:8px"/>'
-      +'<button class="gold" id="go" type="button">Next</button>';
+      +'<button class="gold" id="go" type="button">Next</button>'
+      +'<button class="gold" id="skip" type="button" style="background:transparent;border:1px solid var(--line);color:var(--fg)">Skip — playing for fun</button>';
     var box=$("stores");
     var other=$("other");
     H.st.forEach(function(name){
@@ -327,8 +398,9 @@ function render(){
     $("go").onclick=function(){
       var card=s.pick==="Other"?(other.value||"").trim():s.pick;
       if(!card||card.length<2) return;
-      s.store=card; save(s); render();
+      s.store=card; save(s); pingJoin(); render();
     };
+    $("skip").onclick=function(){ s.store="-"; save(s); pingJoin(); render(); };
     return;
   }
   if(POLICE && !s.beat){
@@ -340,16 +412,17 @@ function render(){
     $("go").onclick=function(){
       var b=($("bt").value||"").trim();
       if(b.length<1) return;
-      s.beat=b; save(s); render();
+      s.beat=b; save(s); pingJoin(); render();
     };
     return;
   }
   s.photos=s.photos||{}; s.inbeat=s.inbeat||{}; s.sent=s.sent||{};
   pingJoin();
   watchInbox();
+  pullList();
   var head='<p class="sub">'+s.name+(s.store?' · '+s.store:'')+(s.beat?' · Beat '+s.beat:'')+' · <span class="code">'+H.c+'</span></p>'
     +'<h1>Find these.</h1>'
-    +'<p class="sub">Take a live photo on each find. It stays on this page. Send this still. If it did not go through, send again from the picture on this card. Do not pull old Camera-roll shots.</p>';
+    +'<p class="sub">Take a photo. Send this still. You can replace the photo any time if Send fails.</p>';
   var finds=(s.list&&s.list.length)?s.list:H.i;
   app.innerHTML=head+finds.map(function(t,i){
     var pic=s.photos[i];
@@ -361,12 +434,12 @@ function render(){
       : "";
     return '<div class="find"><b>Find '+(i+1)+'</b><p>'+t+'</p>'+beatBtns
       +(pic?'<img alt="" data-ph="'+i+'"/>':'')
-      +'<label class="file">Take a photo<input type="file" accept="image/*" capture="environment" data-i="'+i+'"></label>'
-      +'<label class="file alt">Use a hunt still already on this phone<input type="file" accept="image/jpeg" data-i="'+i+'"></label>'
-      +(pic?'<button type="button" class="gold" data-send="'+i+'" onclick="window.smSend(this);return false;">'+(sent?"Sent — send again":"Send this still")+'</button>':'')
-      +(sent?'<div class="ok">Sent. Admin grades at the end. Nothing comes back here. Send again only if this is the wrong still.</div>':'')
+      +'<label class="file">'+(pic?"Replace this photo":"Take a photo")+'<input type="file" accept="image/*" capture="environment" data-i="'+i+'"></label>'
+      +'<label class="file alt">Pick a different picture<input type="file" accept="image/*" data-i="'+i+'"></label>'
+      +(pic?'<button type="button" class="gold" data-send="'+i+'">'+(sent?"Sent — send again":"Send this still")+'</button>':'')
+      +(sent?'<div class="ok">If Admin does not have it, tap Replace this photo or Send again.</div>':'')
       +'</div>';
-  }).join("");
+  }).join("")+hostCta();
   app.querySelectorAll("img[data-ph]").forEach(function(im){
     var i=im.getAttribute("data-ph");
     if(s.photos[i]) im.src=s.photos[i];
@@ -375,16 +448,41 @@ function render(){
     el.addEventListener("change",function(){
       var f=el.files&&el.files[0]; if(!f) return;
       var i=el.getAttribute("data-i");
-      shrink(f,function(show, send){
-        if(!show) return;
+      el.value="";
+      var find=el.closest(".find");
+      var note=find && find.querySelector(".ok");
+      if(!note && find){
+        note=document.createElement("div"); note.className="ok"; find.appendChild(note);
+      }
+      if(note) note.textContent="Keeping that photo…";
+      var preview=URL.createObjectURL(f);
+      var im=find && find.querySelector("img[data-ph]");
+      if(!im && find){
+        im=document.createElement("img");
+        im.setAttribute("data-ph", i);
+        im.alt="";
+        var sendBtn=find.querySelector("[data-send]");
+        find.insertBefore(im, sendBtn||el.parentNode);
+      }
+      if(im) im.src=preview;
+      shrink(f,function(show){
+        try{ URL.revokeObjectURL(preview);}catch(e){}
+        if(!show){
+          if(note) note.textContent="That picture did not stick. Tap Replace this photo and try again.";
+          return;
+        }
         var st=load(); st.photos=st.photos||{}; st.thumbs=st.thumbs||{};
-        st.photos[i]=show; st.thumbs[i]=send||show;
+        st.photos[i]=show; st.thumbs[i]=show;
         st.sent=st.sent||{}; st.sent[i]=false;
         st.grades=st.grades||{}; st.grades[i]="";
-        try{ save(st); }catch(e){
-          st.photos[i]=send||show; try{ save(st); }catch(e2){}
+        try{ save(st); }
+        catch(e){
+          try{ delete st.thumbs; st.photos[i]=show; save(st); }
+          catch(e2){
+            if(note) note.textContent="Phone storage is full on this hunt. Close extra tabs and try a new shot.";
+            return;
+          }
         }
-        if(el.getAttribute("capture")) keepCopy(show, i);
         render();
       });
     });
@@ -396,9 +494,18 @@ function render(){
       save(st); render();
     });
   });
+  app.querySelectorAll("[data-send]").forEach(function(el){
+    el.addEventListener("click",function(ev){
+      ev.preventDefault();
+      smSend(el);
+    });
+  });
 }
 function smSend(btn){
-  try{ sendStill(btn.getAttribute("data-send"), btn); }catch(e){ btn.textContent="Send failed"; }
+  try{ sendStill(btn.getAttribute("data-send"), btn); }catch(e){
+    try{ btn.removeAttribute("data-busy"); }catch(e2){}
+    btn.textContent="Send failed — try again";
+  }
 }
 window.smSend=smSend;
 render();
