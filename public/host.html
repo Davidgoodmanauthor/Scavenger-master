@@ -25,6 +25,8 @@ textarea{min-height:88px}
 .gold,.ghost{width:100%;height:48px;margin-top:10px;border-radius:8px;font-weight:700}
 .gold{border:0;background:var(--gold);color:var(--goldfg)}
 .ghost{border:1px solid var(--line);background:transparent;color:var(--fg)}
+.gold:active,.ghost:active,.thumb:active,.tabs button:active{opacity:.7;transform:scale(.98)}
+.gold[disabled],.ghost[disabled]{opacity:.55}
 .tabs{display:flex;gap:6px;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:8}
 .tabs button{flex:1;height:42px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)}
 .tabs button.on{background:var(--gold);color:var(--goldfg);border-color:var(--gold)}
@@ -51,9 +53,19 @@ textarea{min-height:88px}
 .thumb.ok{border-color:#7dce8a}
 .thumb.no{border-color:#d98b8b;opacity:.7}
 .thumb.empty{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px}
+.thumb.pick{box-shadow:0 0 0 3px var(--gold)}
+.thumb.ok::after,.thumb.no::after{position:absolute;right:3px;bottom:3px;font-size:11px;font-weight:800;border-radius:4px;padding:1px 5px;line-height:1.2}
+.thumb.ok::after{content:"OK";background:#7dce8a;color:#102014}
+.thumb.no::after{content:"X";background:#d98b8b;color:#2a1010}
+#ov{display:none}
+#ov.on{display:block;position:fixed;inset:0;z-index:40;background:var(--bg);overflow:auto;padding:16px 14px 48px;-webkit-overflow-scrolling:touch}
 #ov h2{font-size:20px;margin:8px 0 4px}
 #ov .who{color:var(--gold)}
-#ov img{width:100%;max-height:62vh;object-fit:contain;border-radius:10px;background:#111}
+#ov img{width:100%;max-height:52vh;object-fit:contain;border-radius:10px;background:#111}
+#ov .stamp{display:inline-block;margin:8px 0;padding:6px 12px;border-radius:8px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;font-size:13px}
+#ov .stamp.ok{background:#7dce8a;color:#102014}
+#ov .stamp.no{background:#d98b8b;color:#2a1010}
+#ov .stamp.wait{background:var(--gold);color:var(--goldfg)}
 #boom{display:none;position:fixed;inset:0;z-index:50;background:rgba(12,11,8,.96);align-items:center;justify-content:center;flex-direction:column;text-align:center;padding:24px}
 #boom.on{display:flex}
 #boom .kicker{font-size:14px;letter-spacing:.28em;text-transform:uppercase;color:var(--gold);font-weight:700}
@@ -167,6 +179,7 @@ try {
     }
     app.innerHTML=roster
       +'<h1>Start a hunt</h1><p class="sub">Pick the kind of hunt. Edit the finds. Then start. You can add more finds after it is live.</p>'
+      +'<p class="sub">Hunts are free right now — billing is in test / not required.</p>'
       +'<img id="envpic" alt=""/>'
       +'<div class="card"><label>Your name</label><input id="nm" maxlength="24" placeholder="Game master" value="'+(s.name||"")+'"/>'
       +'<label>What kind of hunt?</label><div class="row" id="envs"></div>'
@@ -244,7 +257,7 @@ try {
     var app=$("app");
     app.innerHTML='<p class="sub">'+(viewOnly?"View only · ":"Game master · ")+esc(envName)+(hunt.status==="closed"?" · Hunt closed":"")+'</p>'
       +'<h1 class="code">'+esc(s.code)+'</h1>'
-      +(viewOnly?'<p class="sub">You can look. You cannot grade, edit, or spin.</p>':'')
+      +(viewOnly?'<p class="sub">You can look. You cannot grade, edit, or spin. This page does not keep checking — tap Refresh board when you want new stills.</p><p><button class="ghost" id="watchRefresh" type="button">Refresh board</button></p>':'')
       +(s.env==="police"?'<p class="sub">Police hunt. Players type their beat. Each still is In beat or Not in beat.</p>':'')
       +'<div class="tabs">'
       +'<button type="button" data-tab="hunt" class="'+(tab==="hunt"?"on":"")+'">Hunt</button>'
@@ -258,6 +271,7 @@ try {
         admin(boardCache||data);
       };
     });
+    if(viewOnly && $("watchRefresh")) $("watchRefresh").onclick=function(){ refresh(true); };
     var pane=$("pane");
     if(tab==="hunt") paneHunt(pane, s, hunt, items, players);
     else if(tab==="pot") panePot(pane, s, hunt, players);
@@ -407,6 +421,8 @@ try {
     pane.innerHTML=html;
     pane.querySelectorAll("[data-open]").forEach(function(btn){
       btn.onclick=function(){
+        pane.querySelectorAll(".thumb.pick").forEach(function(t){ t.classList.remove("pick"); });
+        btn.classList.add("pick");
         openStill(btn.getAttribute("data-sid"), btn.querySelector("img")?btn.querySelector("img").src:"", btn.getAttribute("data-st"), {
           title:btn.getAttribute("data-title"),
           n:btn.getAttribute("data-n"),
@@ -441,18 +457,39 @@ try {
     meta=meta||{};
     var ov=$("ov");
     ov.className="on";
-    var label=status==="counted"?"Counted":status==="rejected"?"Rejected":status==="empty"?"No still yet":"Waiting";
+    ov.scrollTop=0;
+    try{ window.scrollTo(0,0); }catch(e){}
+    var stamp=status==="counted"?"ok":status==="rejected"?"no":status==="empty"?"":"wait";
+    var label=status==="counted"?"Counted":status==="rejected"?"Rejected":status==="empty"?"No still yet":"Waiting — not graded";
     ov.innerHTML='<p class="who">'+esc(meta.who||"")+'</p>'
       +'<h2>Find '+(meta.n||"")+' · '+(meta.pts||1)+' pt</h2>'
       +'<p>'+esc(meta.title||"")+'</p>'
-      +'<p class="sub">'+label+(meta.note?" · "+esc(meta.note):"")+'</p>'
+      +(stamp?'<div class="stamp '+stamp+'">'+label+'</div>':'<p class="sub">'+label+'</p>')
+      +(meta.note?'<p class="sub">'+esc(meta.note)+'</p>':'')
       +(src?'<img alt="" src="'+src+'"/>':'<p class="sub">No photo on this find yet.</p>')
-      +(sid && !viewOnly?'<button class="gold" id="cnt" type="button">Count it</button><button class="ghost" id="rej" type="button">Reject</button>':'')
+      +(sid && !viewOnly && status!=="counted" && status!=="rejected"?'<button class="gold" id="cnt" type="button">Count it</button><button class="ghost" id="rej" type="button">Reject</button>':'')
+      +(sid && !viewOnly && (status==="counted"||status==="rejected")?'<button class="ghost" id="cnt" type="button">Change to counted</button><button class="ghost" id="rej" type="button">Change to rejected</button>':'')
       +'<button class="ghost" id="x" type="button">Close</button>';
     function grade(st){
       var s=load();
+      var cnt=$("cnt"), rej=$("rej");
+      if(cnt){ cnt.disabled=true; cnt.textContent=st==="counted"?"Counting…":cnt.textContent; }
+      if(rej){ rej.disabled=true; rej.textContent=st==="rejected"?"Rejecting…":rej.textContent; }
+      var stampEl=ov.querySelector(".stamp");
+      if(!stampEl){
+        stampEl=document.createElement("div");
+        stampEl.className="stamp";
+        ov.insertBefore(stampEl, ov.querySelector("img")||ov.firstChild);
+      }
+      stampEl.className="stamp "+(st==="counted"?"ok":"no");
+      stampEl.textContent=st==="counted"?"Counted":"Rejected";
       post({a:"grade",c:s.code,t:s.hostToken,sid:sid,s:st}).then(function(out){
-        boardCache=out; ov.className=""; admin(out);
+        boardCache=out;
+        setTimeout(function(){ ov.className=""; admin(out); }, 450);
+      }).catch(function(err){
+        if(cnt){ cnt.disabled=false; cnt.textContent="Count it"; }
+        if(rej){ rej.disabled=false; rej.textContent="Reject"; }
+        stampEl.textContent=err.message||"Did not save";
       });
     }
     if($("cnt")) $("cnt").onclick=function(){ grade("counted"); };
@@ -624,7 +661,6 @@ try {
         watchKey=q.get("w");
         $("app").innerHTML='<p class="sub">Opening view-only board…</p>';
         refresh(true);
-        if(!render.timer) render.timer=setInterval(function(){ refresh(false); }, 5000);
         return;
       }
       if(/[?&]new=1/.test(location.search)){
