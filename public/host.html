@@ -135,13 +135,34 @@ try {
   function post(body){
     return api("",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   }
-  function invite(s, items){
-    var titles=(items||s.items||[]).map(function(x){return typeof x==="string"?x:(x.title||"");}).filter(Boolean);
-    var d=encodeURIComponent([s.code,s.env||"family",String(s.pot||0),titles.join("~")].join("|"));
-    return location.origin+"/play.html?d="+d;
+  function invite(s){
+    return location.origin+"/play.html?c="+encodeURIComponent(s.code)+"&e="+encodeURIComponent(s.env||"family");
   }
-  function text(s, items){
-    return "Scavenger Master — open this as a player:\n"+invite(s, items);
+  function text(s){
+    return "You're invited to a Scavenger Master hunt. Tap to play.\n"+invite(s);
+  }
+  async function shareInvite(msg, url){
+    try{
+      var file=null;
+      try{
+        var r=await fetch("/og.jpg");
+        if(r.ok){
+          var b=await r.blob();
+          file=new File([b], "scavenger-master.jpg", {type:b.type||"image/jpeg"});
+        }
+      }catch(e){}
+      if(file && navigator.canShare && navigator.canShare({files:[file]})){
+        await navigator.share({title:"Scavenger Master", text:msg, url:url, files:[file]});
+        return;
+      }
+      if(navigator.share){
+        await navigator.share({title:"Scavenger Master", text:msg, url:url});
+        return;
+      }
+    }catch(e){
+      if(e && e.name==="AbortError") return;
+    }
+    try{ await navigator.clipboard.writeText(msg); }catch(e2){}
   }
   function esc(v){
     return String(v||"").replace(/[&<>"']/g,function(c){
@@ -294,8 +315,8 @@ try {
       return;
     }
     pane.innerHTML='<div class="card"><p class="sub">Players</p><p>'+roster+'</p></div>'
-      +'<div class="card"><p class="sub">Text this player link. They do not need an account.</p>'
-      +'<p class="sub" style="word-break:break-all">'+invite(s, items)+'</p>'
+      +'<div class="card"><p class="sub">Text this player link. It comes from your phone, so it looks like you. They tap the link — phones often show the Scavenger Master photo card.</p>'
+      +'<p class="sub" style="word-break:break-all">'+invite(s)+'</p>'
       +'<button class="gold" id="share" type="button">Invite player</button>'
       +'<button class="ghost" id="copy" type="button">Copy player invite</button></div>'
       +'<div class="card"><p class="sub">Spectator sees this hunt only. They can look at players and stills. They cannot grade, edit, or spin.</p>'
@@ -319,17 +340,13 @@ try {
     $("extra").innerHTML=[0,1,2,3,4].map(function(i){
       return '<input data-new="'+i+'" placeholder="Find '+(items.length+i+1)+'"/>';
     }).join("");
-    $("share").onclick=function(){
-      var msg=text(s, items);
-      if(navigator.share) navigator.share({text:msg}).catch(function(){ navigator.clipboard.writeText(msg); });
-      else navigator.clipboard.writeText(msg);
-    };
-    $("copy").onclick=function(){ navigator.clipboard.writeText(text(s, items)); $("copy").textContent="Copied"; };
+    $("share").onclick=function(){ shareInvite(text(s), invite(s)); };
+    $("copy").onclick=function(){ navigator.clipboard.writeText(text(s)); $("copy").textContent="Copied"; };
     function specUrl(token){
       return location.origin+"/host.html?c="+encodeURIComponent(s.code)+"&w="+encodeURIComponent(token);
     }
     function specMsg(token){
-      return "Scavenger Master — view only for hunt "+s.code+". You can look, not grade.\n"+specUrl(token);
+      return "You're invited to watch a Scavenger Master hunt. View only.\n"+specUrl(token);
     }
     async function mintWatch(){
       var out=await post({a:"watch",c:s.code,t:s.hostToken});
