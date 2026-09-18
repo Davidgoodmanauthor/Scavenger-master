@@ -17,6 +17,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/outreach"
+  to = "/.netlify/functions/outreach-stats"
+  status = 200
+
+[[redirects]]
   from = "/play"
   to = "/play.html"
   status = 200
