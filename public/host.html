@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-title" content="Scavenger Master"/>
 <title>Scavenger Master · Host</title>
+<script src="/ref.js"></script>
 <style>
 :root{--bg:#0c0b08;--fg:#f3ead4;--muted:#b7a88a;--gold:#c9a227;--goldfg:#1c160c;--card:#16130e;--line:#3a3326}
 html.day{--bg:#f6f0e4;--fg:#1c160c;--muted:#6b5c3e;--gold:#a07d12;--goldfg:#fff8e7;--card:#fffaf0;--line:#d9ccb0}
@@ -45,7 +46,7 @@ textarea{min-height:88px}
 .peg{position:absolute;left:50%;top:-8px;width:0;height:0;border-left:14px solid transparent;border-right:14px solid transparent;border-top:26px solid var(--gold);transform:translateX(-50%);z-index:3;filter:drop-shadow(0 1px 2px #000);pointer-events:none}
 .player{margin:12px 0}
 .player .who{font-size:15px;margin-bottom:8px}
-.film{display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 0 10px}
+.film{display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 0 10px;scroll-snap-type:none;overscroll-behavior-x:contain;touch-action:pan-x}
 .thumb{flex:0 0 72px;width:72px;height:72px;border-radius:10px;border:2px solid var(--line);background:#1a1712;overflow:hidden;position:relative;padding:0;appearance:none;-webkit-appearance:none}
 .thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .thumb .n{position:absolute;left:4px;top:4px;font-size:10px;background:rgba(0,0,0,.65);color:#fff;border-radius:6px;padding:1px 5px}
@@ -110,6 +111,45 @@ try {
   var watchKey="";
   var viewTab="scores";
   var lastBoom="";
+  var filmTouch=false;
+  function overlayOpen(){
+    var ov=$("ov");
+    return !!(ov && ov.className && ov.className.indexOf("on")>=0);
+  }
+  function isTyping(){
+    var el=document.activeElement;
+    if(!el) return false;
+    var t=(el.tagName||"").toLowerCase();
+    return t==="input" || t==="textarea" || t==="select" || el.isContentEditable;
+  }
+  function extraDraft(){
+    var n=0;
+    document.querySelectorAll("[data-new]").forEach(function(el){ if((el.value||"").trim()) n++; });
+    return n>0;
+  }
+  function captureUi(){
+    var films={};
+    document.querySelectorAll(".player .film").forEach(function(el){
+      var who=el.previousElementSibling ? el.previousElementSibling.textContent : "";
+      films[who||el]=el.scrollLeft;
+    });
+    return {y:window.scrollY||document.documentElement.scrollTop||0, films:films};
+  }
+  function restoreUi(snap){
+    if(!snap) return;
+    document.querySelectorAll(".player .film").forEach(function(el){
+      var who=el.previousElementSibling ? el.previousElementSibling.textContent : "";
+      var left=snap.films[who];
+      if(typeof left==="number") el.scrollLeft=left;
+    });
+    if(snap.y) try{ window.scrollTo(0, snap.y); }catch(e){}
+  }
+  document.addEventListener("touchstart", function(e){
+    if(e.target && e.target.closest && e.target.closest(".film")) filmTouch=true;
+  }, true);
+  document.addEventListener("touchend", function(){
+    setTimeout(function(){ filmTouch=false; }, 600);
+  }, true);
   function load(){try{return JSON.parse(localStorage.getItem(K)||"{}")}catch(e){return {}}}
   function loadList(){try{return JSON.parse(localStorage.getItem(LIST)||"{}")}catch(e){return {}}}
   function remember(s){
@@ -191,15 +231,15 @@ try {
     var app=$("app");
     var list=loadList();
     var codes=Object.keys(list).sort(function(a,b){return (list[b].at||0)-(list[a].at||0);});
-    var roster="";
-    if(codes.length){
-      roster='<div class="card"><p class="sub">Hunts this phone is running. Tap a code to open that admin board.</p><div class="row" id="roster"></div>'
-        +'<label>Or type a code this phone started</label><input id="hostcode" maxlength="8" placeholder="UDN3YN" style="text-transform:uppercase"/>'
-        +'<button class="ghost" id="openh" type="button">Open that admin</button>'
-        +'<p class="sub" id="hosterr"></p></div>';
-    }
+    var roster='<div class="card"><p class="sub">Open a hunt this phone already started. Tap a code, or type it.</p><div class="row" id="roster"></div>'
+      +'<label>Host code</label><input id="hostcode" maxlength="8" placeholder="TUB2PK" style="text-transform:uppercase" value=""/>'
+      +'<button class="ghost" id="openh" type="button">Open that admin</button>'
+      +'<label>If this phone forgot the hunt, restore with the email on this site</label>'
+      +'<input id="hostemail" type="email" autocomplete="email" placeholder="you@email.com"/>'
+      +'<button class="gold" id="restore" type="button">Restore this admin</button>'
+      +'<p class="sub" id="hosterr"></p></div>';
     app.innerHTML=roster
-      +'<h1>Start a hunt</h1><p class="sub">Pick the kind of hunt. Edit the finds. Then start. You can add more finds after it is live.</p>'
+      +'<h1>Start a hunt</h1><p class="sub">This starts a new hunt. It does not erase a hunt you already restored.</p>'
       +'<p class="sub">Hunts are free right now — billing is in test / not required.</p>'
       +'<img id="envpic" alt=""/>'
       +'<div class="card"><label>Your name</label><input id="nm" maxlength="24" placeholder="Game master" value="'+(s.name||"")+'"/>'
@@ -242,6 +282,24 @@ try {
     }
     if($("openh")){
       $("openh").onclick=function(){ switchHunt(($("hostcode").value||"").replace(/[^a-zA-Z0-9]/g,"").toUpperCase()); };
+    }
+    if($("restore")){
+      $("restore").onclick=async function(){
+        var code=($("hostcode").value||"").replace(/[^a-zA-Z0-9]/g,"").toUpperCase();
+        var email=($("hostemail").value||"").trim();
+        if(code.length<4){ $("hosterr").textContent="Type the hunt code first."; return; }
+        if(!email || email.indexOf("@")<1){ $("hosterr").textContent="Type the email you use for this site."; return; }
+        $("restore").textContent="Restoring…";
+        try{
+          var out=await post({a:"reclaim",c:code,email:email});
+          if(!out.ok) throw new Error(out.error||"Could not restore.");
+          save({code:out.code,hostToken:out.hostToken,watchToken:"",env:out.environment||"",name:out.adminName||"",tab:"hunt"});
+          location.href="/host.html";
+        }catch(e){
+          $("restore").textContent="Restore this admin";
+          $("hosterr").textContent=e.message||"Could not restore.";
+        }
+      };
     }
     $("more").onclick=function(){
       readDraft();
@@ -502,7 +560,8 @@ try {
       stampEl.textContent=st==="counted"?"Counted":"Rejected";
       post({a:"grade",c:s.code,t:s.hostToken,sid:sid,s:st}).then(function(out){
         boardCache=out;
-        setTimeout(function(){ ov.className=""; admin(out); }, 450);
+        var snap=captureUi();
+        setTimeout(function(){ ov.className=""; admin(out); restoreUi(snap); }, 450);
       }).catch(function(err){
         if(cnt){ cnt.disabled=false; cnt.textContent="Count it"; }
         if(rej){ rej.disabled=false; rej.textContent="Reject"; }
@@ -639,7 +698,16 @@ try {
   }
 
   async function refresh(force){
-    if(spinning && !force) return;
+    var tab=viewOnly?viewTab:((load().tab)||"hunt");
+    if(!force){
+      if(spinning) return;
+      if(overlayOpen()) return;
+      if(isTyping()) return;
+      if(extraDraft()) return;
+      if(filmTouch) return;
+      if(tab==="hunt") return;
+      if(tab==="pot" && $("wheel")) return;
+    }
     try{
       var path;
       if(viewOnly){
@@ -655,12 +723,17 @@ try {
       ]);
       if(!out.ok) throw new Error(out.error||"Could not load.");
       boardCache=out;
-      if(!force && $("wheel")){
-        var stay=viewOnly?viewTab:((load().tab)||"hunt");
-        if(stay==="pot") return;
+      if(!force){
+        if(spinning || overlayOpen() || isTyping() || extraDraft() || filmTouch) return;
+        tab=viewOnly?viewTab:((load().tab)||"hunt");
+        if(tab==="hunt") return;
+        if(tab==="pot" && $("wheel")) return;
       }
+      var snap=captureUi();
       admin(out);
+      restoreUi(snap);
     }catch(err){
+      if(!force && (isTyping() || extraDraft() || overlayOpen())) return;
       $("app").innerHTML='<div class="card"><p class="bad">'+(err.message||"Could not load board.")+'</p>'
         +'<button class="gold" id="retry" type="button">Retry</button>'
         +(viewOnly?'':'<button class="ghost" id="wipe2" type="button">Start a new hunt</button>')+'</div>';
